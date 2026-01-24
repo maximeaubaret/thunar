@@ -440,7 +440,15 @@ thunar_miller_columns_view_set_property (GObject      *object,
 static ThunarFile *
 thunar_miller_columns_view_get_current_directory (ThunarNavigator *navigator)
 {
-  return THUNAR_MILLER_COLUMNS_VIEW (navigator)->current_directory;
+  ThunarMillerColumnsView *view = THUNAR_MILLER_COLUMNS_VIEW (navigator);
+  ThunarMillerColumn      *active_column;
+  ThunarFile              *dir;
+
+  active_column = g_list_nth_data (view->columns, view->active_column_index);
+  if (active_column != NULL)
+    return thunar_miller_column_get_directory (active_column);
+
+  return view->current_directory;
 }
 
 static void
@@ -784,6 +792,7 @@ thunar_miller_columns_view_column_focus_in (ThunarMillerColumn      *column,
   GList *lp;
 
   column_index = g_list_index (view->columns, column);
+
   if (column_index < 0 || column_index == view->active_column_index)
     return;
 
@@ -791,6 +800,8 @@ thunar_miller_columns_view_column_focus_in (ThunarMillerColumn      *column,
     thunar_miller_column_set_active (THUNAR_MILLER_COLUMN (lp->data), i == column_index);
 
   view->active_column_index = column_index;
+
+  g_object_notify (G_OBJECT (view), "current-directory");
 }
 
 static void

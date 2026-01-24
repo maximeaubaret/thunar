@@ -3119,17 +3119,30 @@ static gboolean
 thunar_action_manager_action_paste (ThunarActionManager *action_mgr)
 {
   ThunarClipboardManager *clipboard;
+  ThunarFile             *target_directory;
+  GtkWidget              *view;
 
   _thunar_return_val_if_fail (THUNAR_IS_ACTION_MANAGER (action_mgr), FALSE);
 
   if (action_mgr->is_searching)
     return TRUE;
 
+  target_directory = action_mgr->current_directory;
+
+  if (THUNAR_IS_WINDOW (action_mgr->widget))
+    {
+      view = thunar_window_get_view (THUNAR_WINDOW (action_mgr->widget));
+      if (view != NULL && THUNAR_IS_NAVIGATOR (view))
+        target_directory = thunar_navigator_get_current_directory (THUNAR_NAVIGATOR (view));
+    }
+
+  if (target_directory == NULL)
+    return TRUE;
+
   clipboard = thunar_clipboard_manager_get_for_display (gtk_widget_get_display (action_mgr->widget));
-  thunar_clipboard_manager_paste_files (clipboard, thunar_file_get_file (action_mgr->current_directory), action_mgr->widget, action_mgr->new_files_created_closure);
+  thunar_clipboard_manager_paste_files (clipboard, thunar_file_get_file (target_directory), action_mgr->widget, action_mgr->new_files_created_closure);
   g_object_unref (G_OBJECT (clipboard));
 
-  /* required in case of shortcut activation, in order to signal that the accel key got handled */
   return TRUE;
 }
 
