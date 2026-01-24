@@ -405,6 +405,44 @@ thunar_miller_column_class_init (ThunarMillerColumnClass *klass)
 }
 
 static void
+thunar_miller_column_search_position_func (GtkTreeView *tree_view,
+                                           GtkWidget   *search_dialog,
+                                           gpointer     user_data)
+{
+  GtkWidget    *column;
+  GtkAllocation allocation;
+  GdkWindow    *column_window;
+  gint          column_x, column_y;
+  gint          dialog_height;
+
+  column = gtk_widget_get_parent (GTK_WIDGET (tree_view));
+  if (column == NULL)
+    return;
+
+  column_window = gtk_widget_get_window (column);
+  if (column_window == NULL)
+    return;
+
+  gdk_window_get_origin (column_window, &column_x, &column_y);
+  gtk_widget_get_allocation (column, &allocation);
+  gtk_window_get_size (GTK_WINDOW (search_dialog), NULL, &dialog_height);
+
+  gtk_window_move (GTK_WINDOW (search_dialog), column_x,
+                   column_y + allocation.height - dialog_height);
+}
+
+static void
+thunar_miller_column_notify_model (GtkTreeView        *tree_view,
+                                   GParamSpec         *pspec,
+                                   ThunarMillerColumn *column)
+{
+  /* We need to set the search column here, as GtkTreeView resets it
+   * whenever a new model is set.
+   */
+  gtk_tree_view_set_search_column (tree_view, THUNAR_COLUMN_NAME);
+}
+
+static void
 thunar_miller_column_init (ThunarMillerColumn *column)
 {
   GtkTreeViewColumn *tree_column;
@@ -426,10 +464,15 @@ thunar_miller_column_init (ThunarMillerColumn *column)
   column->tree_view = gtk_tree_view_new ();
   gtk_tree_view_set_headers_visible (GTK_TREE_VIEW (column->tree_view), FALSE);
   gtk_tree_view_set_enable_search (GTK_TREE_VIEW (column->tree_view), TRUE);
+  gtk_tree_view_set_search_position_func (GTK_TREE_VIEW (column->tree_view),
+                                          thunar_miller_column_search_position_func,
+                                          NULL, NULL);
   gtk_tree_view_set_rubber_banding (GTK_TREE_VIEW (column->tree_view), TRUE);
   gtk_container_add (GTK_CONTAINER (column), column->tree_view);
   gtk_widget_show (column->tree_view);
 
+  g_signal_connect (column->tree_view, "notify::model",
+                    G_CALLBACK (thunar_miller_column_notify_model), column);
   g_signal_connect (column->tree_view, "row-activated",
                     G_CALLBACK (thunar_miller_column_row_activated), column);
   g_signal_connect (column->tree_view, "button-press-event",
