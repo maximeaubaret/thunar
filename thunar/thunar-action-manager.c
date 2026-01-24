@@ -2734,17 +2734,30 @@ static gboolean
 thunar_action_manager_action_create_folder (ThunarActionManager *action_mgr)
 {
   ThunarApplication *application;
+  ThunarFile        *target_directory;
+  GtkWidget         *view;
   GList              path_list;
   gchar             *name;
   gchar             *generated_name;
 
   _thunar_return_val_if_fail (THUNAR_IS_ACTION_MANAGER (action_mgr), FALSE);
 
-  if (thunar_file_is_trash (action_mgr->current_directory) || action_mgr->is_searching)
+  target_directory = action_mgr->current_directory;
+
+  if (THUNAR_IS_WINDOW (action_mgr->widget))
+    {
+      view = thunar_window_get_view (THUNAR_WINDOW (action_mgr->widget));
+      if (view != NULL && THUNAR_IS_NAVIGATOR (view))
+        target_directory = thunar_navigator_get_current_directory (THUNAR_NAVIGATOR (view));
+    }
+
+  if (target_directory == NULL)
     return TRUE;
 
-  /* ask the user to enter a name for the new folder */
-  generated_name = thunar_util_next_new_file_name (action_mgr->current_directory, _("New Folder"), THUNAR_NEXT_FILE_NAME_MODE_NEW, TRUE);
+  if (thunar_file_is_trash (target_directory) || action_mgr->is_searching)
+    return TRUE;
+
+  generated_name = thunar_util_next_new_file_name (target_directory, _("New Folder"), THUNAR_NEXT_FILE_NAME_MODE_NEW, TRUE);
   name = thunar_dialogs_show_create (action_mgr->widget,
                                      "inode/directory",
                                      generated_name,
@@ -2753,26 +2766,21 @@ thunar_action_manager_action_create_folder (ThunarActionManager *action_mgr)
 
   if (G_LIKELY (name != NULL))
     {
-      /* fake the path list */
       if (THUNAR_IS_TREE_VIEW (action_mgr->widget) && action_mgr->files_are_selected && action_mgr->single_directory_to_process)
         path_list.data = g_file_resolve_relative_path (thunar_file_get_file (action_mgr->single_folder), name);
       else
-        path_list.data = g_file_resolve_relative_path (thunar_file_get_file (action_mgr->current_directory), name);
+        path_list.data = g_file_resolve_relative_path (thunar_file_get_file (target_directory), name);
       path_list.next = path_list.prev = NULL;
 
-      /* launch the operation */
       application = thunar_application_get ();
       thunar_application_mkdir (application, action_mgr->widget, &path_list, action_mgr->new_files_created_closure, THUNAR_OPERATION_LOG_OPERATIONS);
       g_object_unref (G_OBJECT (application));
 
-      /* release the path */
       g_object_unref (path_list.data);
 
-      /* release the file name */
       g_free (name);
     }
 
-  /* required in case of shortcut activation, in order to signal that the accel key got handled */
   return TRUE;
 }
 
