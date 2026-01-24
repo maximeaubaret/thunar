@@ -125,6 +125,10 @@ thunar_SOURCES =							\
 	thunar-job-operation-history.h					\
 	thunar-list-model.c						\
 	thunar-list-model.h						\
+	thunar-miller-column.c						\
+	thunar-miller-column.h						\
+	thunar-miller-columns-view.c					\
+	thunar-miller-columns-view.h					\
 	thunar-location-bar.c						\
 	thunar-location-bar.h						\
 	thunar-location-button.c					\
