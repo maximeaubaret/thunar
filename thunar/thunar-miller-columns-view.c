@@ -19,6 +19,7 @@
 
 #include "thunar/thunar-miller-columns-view.h"
 
+#include "thunar/thunar-action-manager.h"
 #include "thunar/thunar-component.h"
 #include "thunar/thunar-enum-types.h"
 #include "thunar/thunar-file.h"
@@ -32,6 +33,7 @@
 #include "thunar/thunar-private.h"
 #include "thunar/thunar-util.h"
 #include "thunar/thunar-view.h"
+#include "thunar/thunar-window.h"
 
 #include <libxfce4ui/libxfce4ui.h>
 
@@ -602,9 +604,18 @@ thunar_miller_columns_view_column_file_activated (ThunarMillerColumn      *colum
                                                   ThunarFile              *file,
                                                   ThunarMillerColumnsView *view)
 {
+  ThunarActionManager *action_mgr;
+  GtkWidget           *window;
+
   if (thunar_file_is_directory (file))
     {
       thunar_navigator_change_directory (THUNAR_NAVIGATOR (view), file);
+    }
+  else
+    {
+      window = gtk_widget_get_toplevel (GTK_WIDGET (view));
+      action_mgr = thunar_window_get_action_manager (THUNAR_WINDOW (window));
+      thunar_action_manager_activate_selected_files (action_mgr, THUNAR_ACTION_MANAGER_CHANGE_DIRECTORY, NULL);
     }
 }
 
