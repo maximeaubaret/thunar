@@ -2791,6 +2791,8 @@ thunar_action_manager_action_create_document (ThunarActionManager *action_mgr,
                                               GtkWidget           *menu_item)
 {
   ThunarApplication *application;
+  ThunarFile        *target_directory;
+  GtkWidget         *view;
   GList              target_path_list;
   gchar             *name;
   gchar             *generated_name;
@@ -2799,7 +2801,19 @@ thunar_action_manager_action_create_document (ThunarActionManager *action_mgr,
 
   _thunar_return_val_if_fail (THUNAR_IS_ACTION_MANAGER (action_mgr), FALSE);
 
-  if (thunar_file_is_trash (action_mgr->current_directory) || action_mgr->is_searching)
+  target_directory = action_mgr->current_directory;
+
+  if (THUNAR_IS_WINDOW (action_mgr->widget))
+    {
+      view = thunar_window_get_view (THUNAR_WINDOW (action_mgr->widget));
+      if (view != NULL && THUNAR_IS_NAVIGATOR (view))
+        target_directory = thunar_navigator_get_current_directory (THUNAR_NAVIGATOR (view));
+    }
+
+  if (target_directory == NULL)
+    return TRUE;
+
+  if (thunar_file_is_trash (target_directory) || action_mgr->is_searching)
     return TRUE;
 
   template_file = g_object_get_qdata (G_OBJECT (menu_item), thunar_action_manager_file_quark);
@@ -2807,24 +2821,20 @@ thunar_action_manager_action_create_document (ThunarActionManager *action_mgr,
   if (template_file != NULL)
     {
       gchar *basename = g_file_get_basename (thunar_file_get_file (template_file));
-      /* generate a title for the create dialog */
       title = g_strdup_printf (_("Create Document from template \"%s\""),
                                thunar_file_get_display_name (template_file));
 
-      /* ask the user to enter a name for the new document */
-      generated_name = thunar_util_next_new_file_name (action_mgr->current_directory, basename, THUNAR_NEXT_FILE_NAME_MODE_NEW, FALSE);
+      generated_name = thunar_util_next_new_file_name (target_directory, basename, THUNAR_NEXT_FILE_NAME_MODE_NEW, FALSE);
       g_free (basename);
       name = thunar_dialogs_show_create (action_mgr->widget,
                                          thunar_file_get_content_type (THUNAR_FILE (template_file)),
                                          generated_name,
                                          title);
-      /* cleanup */
       g_free (title);
     }
   else
     {
-      /* ask the user to enter a name for the new empty file */
-      generated_name = thunar_util_next_new_file_name (action_mgr->current_directory, _("New Empty File"), THUNAR_NEXT_FILE_NAME_MODE_NEW, FALSE);
+      generated_name = thunar_util_next_new_file_name (target_directory, _("New Empty File"), THUNAR_NEXT_FILE_NAME_MODE_NEW, FALSE);
       name = thunar_dialogs_show_create (action_mgr->widget,
                                          "text/plain",
                                          generated_name,
@@ -2836,30 +2846,25 @@ thunar_action_manager_action_create_document (ThunarActionManager *action_mgr,
     {
       if (G_LIKELY (action_mgr->parent_folder != NULL))
         {
-          /* fake the target path list */
           if (THUNAR_IS_TREE_VIEW (action_mgr->widget) && action_mgr->files_are_selected && action_mgr->single_directory_to_process)
             target_path_list.data = g_file_get_child (thunar_file_get_file (action_mgr->single_folder), name);
           else
-            target_path_list.data = g_file_get_child (thunar_file_get_file (action_mgr->current_directory), name);
+            target_path_list.data = g_file_get_child (thunar_file_get_file (target_directory), name);
           target_path_list.next = NULL;
           target_path_list.prev = NULL;
 
-          /* launch the operation */
           application = thunar_application_get ();
           thunar_application_creat (application, action_mgr->widget, &target_path_list,
                                     template_file != NULL ? thunar_file_get_file (template_file) : NULL,
                                     action_mgr->new_files_created_closure, THUNAR_OPERATION_LOG_OPERATIONS);
           g_object_unref (G_OBJECT (application));
 
-          /* release the target path */
           g_object_unref (target_path_list.data);
         }
 
-      /* release the file name */
       g_free (name);
     }
 
-  /* required in case of shortcut activation, in order to signal that the accel key got handled */
   return TRUE;
 }
 
