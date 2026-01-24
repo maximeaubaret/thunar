@@ -70,6 +70,7 @@ struct _ThunarMillerColumn
   gboolean                 show_hidden;
   gboolean                 active;
   gboolean                 loading;
+  guint                    selection_changed_id;
 };
 
 G_DEFINE_TYPE (ThunarMillerColumn, thunar_miller_column, GTK_TYPE_SCROLLED_WINDOW)
@@ -78,6 +79,9 @@ static void
 thunar_miller_column_finalize (GObject *object)
 {
   ThunarMillerColumn *column = THUNAR_MILLER_COLUMN (object);
+
+  if (column->selection_changed_id != 0)
+    g_source_remove (column->selection_changed_id);
 
   if (column->directory != NULL)
     g_object_unref (column->directory);
@@ -148,11 +152,25 @@ thunar_miller_column_set_property (GObject      *object,
     }
 }
 
+static gboolean
+thunar_miller_column_selection_changed_idle (gpointer user_data)
+{
+  ThunarMillerColumn *column = THUNAR_MILLER_COLUMN (user_data);
+  column->selection_changed_id = 0;
+  g_signal_emit (column, miller_column_signals[SIGNAL_SELECTION_CHANGED], 0);
+  return G_SOURCE_REMOVE;
+}
+
 static void
 thunar_miller_column_selection_changed (GtkTreeSelection   *selection,
                                         ThunarMillerColumn *column)
 {
-  g_signal_emit (column, miller_column_signals[SIGNAL_SELECTION_CHANGED], 0);
+  if (column->selection_changed_id != 0)
+    g_source_remove (column->selection_changed_id);
+
+  column->selection_changed_id = g_timeout_add (150,
+                                                thunar_miller_column_selection_changed_idle,
+                                                column);
 }
 
 static void
@@ -171,7 +189,10 @@ thunar_miller_column_row_activated (GtkTreeView        *tree_view,
       file = thunar_standard_view_model_get_file (THUNAR_STANDARD_VIEW_MODEL (model), &iter);
       if (file != NULL)
         {
-          g_signal_emit (column, miller_column_signals[SIGNAL_FILE_ACTIVATED], 0, file);
+          if (thunar_file_is_directory (file))
+            g_signal_emit (column, miller_column_signals[SIGNAL_NAVIGATE_RIGHT], 0);
+          else
+            g_signal_emit (column, miller_column_signals[SIGNAL_FILE_ACTIVATED], 0, file);
           g_object_unref (file);
         }
     }
@@ -453,6 +474,7 @@ thunar_miller_column_init (ThunarMillerColumn *column)
   column->show_hidden = FALSE;
   column->active = FALSE;
   column->loading = FALSE;
+  column->selection_changed_id = 0;
 
   gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (column),
                                   GTK_POLICY_NEVER,
@@ -463,7 +485,7 @@ thunar_miller_column_init (ThunarMillerColumn *column)
 
   column->tree_view = gtk_tree_view_new ();
   gtk_tree_view_set_headers_visible (GTK_TREE_VIEW (column->tree_view), FALSE);
-  gtk_tree_view_set_enable_search (GTK_TREE_VIEW (column->tree_view), TRUE);
+  gtk_tree_view_set_enable_search (GTK_TREE_VIEW (column->tree_view), FALSE);
   gtk_tree_view_set_search_position_func (GTK_TREE_VIEW (column->tree_view),
                                           thunar_miller_column_search_position_func,
                                           NULL, NULL);
@@ -779,6 +801,8 @@ thunar_miller_column_set_active (ThunarMillerColumn *column,
 
   column->active = active;
 
+  gtk_tree_view_set_enable_search (GTK_TREE_VIEW (column->tree_view), active);
+
   if (active)
     {
       gtk_widget_grab_focus (column->tree_view);
@@ -797,6 +821,13 @@ thunar_miller_column_get_active (ThunarMillerColumn *column)
 {
   _thunar_return_val_if_fail (THUNAR_IS_MILLER_COLUMN (column), FALSE);
   return column->active;
+}
+
+gboolean
+thunar_miller_column_get_searching (ThunarMillerColumn *column)
+{
+  _thunar_return_val_if_fail (THUNAR_IS_MILLER_COLUMN (column), FALSE);
+  return FALSE;
 }
 
 ThunarFolder *

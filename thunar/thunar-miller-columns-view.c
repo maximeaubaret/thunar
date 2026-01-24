@@ -799,19 +799,10 @@ thunar_miller_columns_view_column_selection_changed (ThunarMillerColumn      *co
 {
   ThunarFile *selected_file;
   gint        column_index;
-  GList      *lp;
-  gint        i;
 
   column_index = g_list_index (view->columns, column);
   if (column_index < 0)
     return;
-
-  for (lp = view->columns, i = 0; lp != NULL; lp = lp->next, i++)
-    {
-      thunar_miller_column_set_active (THUNAR_MILLER_COLUMN (lp->data), i == column_index);
-    }
-
-  view->active_column_index = column_index;
 
   selected_file = thunar_miller_column_get_selected_file (column);
 
@@ -854,7 +845,6 @@ thunar_miller_columns_view_column_selection_changed (ThunarMillerColumn      *co
           thunar_miller_column_set_directory (next_column, selected_file);
         }
 
-      thunar_miller_columns_view_scroll_to_active_column (view);
     }
   else if (selected_file != NULL)
     {

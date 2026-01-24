@@ -86,6 +86,9 @@ thunar_miller_column_set_active (ThunarMillerColumn *column,
 gboolean
 thunar_miller_column_get_active (ThunarMillerColumn *column);
 
+gboolean
+thunar_miller_column_get_searching (ThunarMillerColumn *column);
+
 ThunarFolder *
 thunar_miller_column_get_folder (ThunarMillerColumn *column);
 
