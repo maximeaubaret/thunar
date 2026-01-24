@@ -409,7 +409,6 @@ thunar_miller_column_init (ThunarMillerColumn *column)
 {
   GtkTreeViewColumn *tree_column;
   GtkTreeSelection  *selection;
-  GtkCellRenderer   *arrow_renderer;
 
   column->directory = NULL;
   column->model = NULL;
@@ -458,13 +457,6 @@ thunar_miller_column_init (ThunarMillerColumn *column)
   gtk_tree_view_column_set_attributes (tree_column, column->name_renderer,
                                        "text", THUNAR_COLUMN_NAME,
                                        NULL);
-
-  arrow_renderer = gtk_cell_renderer_pixbuf_new ();
-  g_object_set (arrow_renderer,
-                "icon-name", "go-next-symbolic",
-                "stock-size", GTK_ICON_SIZE_MENU,
-                NULL);
-  gtk_tree_view_column_pack_end (tree_column, arrow_renderer, FALSE);
 
   gtk_tree_view_append_column (GTK_TREE_VIEW (column->tree_view), tree_column);
 
