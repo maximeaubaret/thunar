@@ -68,6 +68,9 @@ static void thunar_miller_columns_view_set_selected_files (ThunarView *view, GLi
 static void thunar_miller_columns_view_column_file_activated (ThunarMillerColumn *column, ThunarFile *file, ThunarMillerColumnsView *view);
 static void thunar_miller_columns_view_column_selection_changed (ThunarMillerColumn *column, ThunarMillerColumnsView *view);
 static void thunar_miller_columns_view_column_context_menu (ThunarMillerColumn *column, ThunarMillerColumnsView *view);
+static void thunar_miller_columns_view_column_navigate_left (ThunarMillerColumn *column, ThunarMillerColumnsView *view);
+static void thunar_miller_columns_view_column_navigate_right (ThunarMillerColumn *column, ThunarMillerColumnsView *view);
+static void thunar_miller_columns_view_column_focus_in (ThunarMillerColumn *column, ThunarMillerColumnsView *view);
 static void thunar_miller_columns_view_update_columns (ThunarMillerColumnsView *view);
 static void thunar_miller_columns_view_scroll_to_active_column (ThunarMillerColumnsView *view);
 static void thunar_miller_columns_view_update_statusbar_text (ThunarMillerColumnsView *view);
@@ -680,6 +683,71 @@ thunar_miller_columns_view_context_menu (ThunarMillerColumnsView *view)
 }
 
 static void
+thunar_miller_columns_view_column_navigate_left (ThunarMillerColumn      *column,
+                                                 ThunarMillerColumnsView *view)
+{
+  gint                column_index;
+  ThunarMillerColumn *prev_column;
+  ThunarFile         *current_dir;
+
+  column_index = g_list_index (view->columns, column);
+  if (column_index <= 0)
+    return;
+
+  prev_column = THUNAR_MILLER_COLUMN (g_list_nth_data (view->columns, column_index - 1));
+  if (prev_column != NULL)
+    {
+      thunar_miller_column_unselect_all (column);
+      current_dir = thunar_miller_column_get_directory (column);
+      if (current_dir != NULL)
+        thunar_miller_column_set_selected_file (prev_column, current_dir);
+      thunar_miller_column_set_active (prev_column, TRUE);
+    }
+}
+
+static void
+thunar_miller_columns_view_column_navigate_right (ThunarMillerColumn      *column,
+                                                  ThunarMillerColumnsView *view)
+{
+  gint                column_index;
+  ThunarMillerColumn *next_column;
+  GList              *selected;
+
+  column_index = g_list_index (view->columns, column);
+  if (column_index < 0)
+    return;
+
+  next_column = THUNAR_MILLER_COLUMN (g_list_nth_data (view->columns, column_index + 1));
+  if (next_column != NULL)
+    {
+      thunar_miller_column_set_active (next_column, TRUE);
+      selected = thunar_miller_column_get_selected_files (next_column);
+      if (selected == NULL)
+        thunar_miller_column_select_first (next_column);
+      else
+        g_list_free_full (selected, g_object_unref);
+    }
+}
+
+static void
+thunar_miller_columns_view_column_focus_in (ThunarMillerColumn      *column,
+                                            ThunarMillerColumnsView *view)
+{
+  gint column_index;
+  gint i;
+  GList *lp;
+
+  column_index = g_list_index (view->columns, column);
+  if (column_index < 0 || column_index == view->active_column_index)
+    return;
+
+  for (lp = view->columns, i = 0; lp != NULL; lp = lp->next, i++)
+    thunar_miller_column_set_active (THUNAR_MILLER_COLUMN (lp->data), i == column_index);
+
+  view->active_column_index = column_index;
+}
+
+static void
 thunar_miller_columns_view_column_selection_changed (ThunarMillerColumn      *column,
                                                      ThunarMillerColumnsView *view)
 {
@@ -722,6 +790,12 @@ thunar_miller_columns_view_column_selection_changed (ThunarMillerColumn      *co
                             G_CALLBACK (thunar_miller_columns_view_column_selection_changed), view);
           g_signal_connect (new_column, "context-menu",
                             G_CALLBACK (thunar_miller_columns_view_column_context_menu), view);
+          g_signal_connect (new_column, "navigate-left",
+                            G_CALLBACK (thunar_miller_columns_view_column_navigate_left), view);
+          g_signal_connect (new_column, "navigate-right",
+                            G_CALLBACK (thunar_miller_columns_view_column_navigate_right), view);
+          g_signal_connect (new_column, "focus-in",
+                            G_CALLBACK (thunar_miller_columns_view_column_focus_in), view);
 
           view->columns = g_list_append (view->columns, new_column);
           gtk_box_pack_start (GTK_BOX (view->columns_box), new_column, FALSE, FALSE, 0);
@@ -820,6 +894,12 @@ thunar_miller_columns_view_update_columns (ThunarMillerColumnsView *view)
                         G_CALLBACK (thunar_miller_columns_view_column_selection_changed), view);
       g_signal_connect (column_widget, "context-menu",
                         G_CALLBACK (thunar_miller_columns_view_column_context_menu), view);
+      g_signal_connect (column_widget, "navigate-left",
+                        G_CALLBACK (thunar_miller_columns_view_column_navigate_left), view);
+      g_signal_connect (column_widget, "navigate-right",
+                        G_CALLBACK (thunar_miller_columns_view_column_navigate_right), view);
+      g_signal_connect (column_widget, "focus-in",
+                        G_CALLBACK (thunar_miller_columns_view_column_focus_in), view);
       g_signal_connect (column_widget, "notify::loading",
                         G_CALLBACK (thunar_miller_columns_view_column_notify_loading), view);
 
@@ -849,6 +929,12 @@ thunar_miller_columns_view_update_columns (ThunarMillerColumnsView *view)
                     G_CALLBACK (thunar_miller_columns_view_column_selection_changed), view);
   g_signal_connect (column_widget, "context-menu",
                     G_CALLBACK (thunar_miller_columns_view_column_context_menu), view);
+  g_signal_connect (column_widget, "navigate-left",
+                    G_CALLBACK (thunar_miller_columns_view_column_navigate_left), view);
+  g_signal_connect (column_widget, "navigate-right",
+                    G_CALLBACK (thunar_miller_columns_view_column_navigate_right), view);
+  g_signal_connect (column_widget, "focus-in",
+                    G_CALLBACK (thunar_miller_columns_view_column_focus_in), view);
   g_signal_connect (column_widget, "notify::loading",
                     G_CALLBACK (thunar_miller_columns_view_column_notify_loading), view);
 

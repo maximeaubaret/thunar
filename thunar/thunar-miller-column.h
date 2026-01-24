@@ -88,6 +88,9 @@ thunar_miller_column_get_active (ThunarMillerColumn *column);
 ThunarFolder *
 thunar_miller_column_get_folder (ThunarMillerColumn *column);
 
+void
+thunar_miller_column_select_first (ThunarMillerColumn *column);
+
 G_END_DECLS;
 
 #endif /* !__THUNAR_MILLER_COLUMN_H__ */

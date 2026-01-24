@@ -19,6 +19,8 @@
 
 #include "thunar/thunar-miller-column.h"
 
+#include <gdk/gdkkeysyms.h>
+
 #include "thunar/thunar-folder.h"
 #include "thunar/thunar-gobject-extensions.h"
 #include "thunar/thunar-icon-renderer.h"
@@ -42,6 +44,9 @@ enum
   SIGNAL_FILE_ACTIVATED,
   SIGNAL_SELECTION_CHANGED,
   SIGNAL_CONTEXT_MENU,
+  SIGNAL_NAVIGATE_LEFT,
+  SIGNAL_NAVIGATE_RIGHT,
+  SIGNAL_FOCUS_IN,
   LAST_SIGNAL
 };
 
@@ -222,6 +227,67 @@ thunar_miller_column_button_press (GtkWidget          *widget,
   return FALSE;
 }
 
+static gboolean
+thunar_miller_column_focus_in (GtkWidget          *widget,
+                               GdkEventFocus      *event,
+                               ThunarMillerColumn *column)
+{
+  g_signal_emit (column, miller_column_signals[SIGNAL_FOCUS_IN], 0);
+  return FALSE;
+}
+
+static gboolean
+thunar_miller_column_select_first_or_last (ThunarMillerColumn *column,
+                                           gboolean            select_first)
+{
+  GtkTreeSelection *selection;
+  GtkTreeModel     *model;
+  GtkTreePath      *path;
+  gint              n_children;
+
+  model = gtk_tree_view_get_model (GTK_TREE_VIEW (column->tree_view));
+  if (model == NULL)
+    return FALSE;
+
+  n_children = gtk_tree_model_iter_n_children (model, NULL);
+  if (n_children == 0)
+    return FALSE;
+
+  if (select_first)
+    path = gtk_tree_path_new_first ();
+  else
+    path = gtk_tree_path_new_from_indices (n_children - 1, -1);
+
+  selection = gtk_tree_view_get_selection (GTK_TREE_VIEW (column->tree_view));
+  gtk_tree_selection_unselect_all (selection);
+  gtk_tree_selection_select_path (selection, path);
+  gtk_tree_view_scroll_to_cell (GTK_TREE_VIEW (column->tree_view), path, NULL, FALSE, 0, 0);
+  gtk_tree_path_free (path);
+  return TRUE;
+}
+
+static gboolean
+thunar_miller_column_key_press (GtkWidget          *widget,
+                                GdkEventKey        *event,
+                                ThunarMillerColumn *column)
+{
+  switch (event->keyval)
+    {
+    case GDK_KEY_Left:
+      g_signal_emit (column, miller_column_signals[SIGNAL_NAVIGATE_LEFT], 0);
+      return TRUE;
+
+    case GDK_KEY_Right:
+      g_signal_emit (column, miller_column_signals[SIGNAL_NAVIGATE_RIGHT], 0);
+      return TRUE;
+
+    default:
+      break;
+    }
+
+  return FALSE;
+}
+
 static void
 thunar_miller_column_class_init (ThunarMillerColumnClass *klass)
 {
@@ -287,6 +353,30 @@ thunar_miller_column_class_init (ThunarMillerColumnClass *klass)
                   0, NULL, NULL,
                   g_cclosure_marshal_VOID__VOID,
                   G_TYPE_NONE, 0);
+
+  miller_column_signals[SIGNAL_NAVIGATE_LEFT] =
+    g_signal_new ("navigate-left",
+                  G_TYPE_FROM_CLASS (klass),
+                  G_SIGNAL_RUN_LAST,
+                  0, NULL, NULL,
+                  g_cclosure_marshal_VOID__VOID,
+                  G_TYPE_NONE, 0);
+
+  miller_column_signals[SIGNAL_NAVIGATE_RIGHT] =
+    g_signal_new ("navigate-right",
+                  G_TYPE_FROM_CLASS (klass),
+                  G_SIGNAL_RUN_LAST,
+                  0, NULL, NULL,
+                  g_cclosure_marshal_VOID__VOID,
+                  G_TYPE_NONE, 0);
+
+  miller_column_signals[SIGNAL_FOCUS_IN] =
+    g_signal_new ("focus-in",
+                  G_TYPE_FROM_CLASS (klass),
+                  G_SIGNAL_RUN_LAST,
+                  0, NULL, NULL,
+                  g_cclosure_marshal_VOID__VOID,
+                  G_TYPE_NONE, 0);
 }
 
 static void
@@ -320,6 +410,10 @@ thunar_miller_column_init (ThunarMillerColumn *column)
                     G_CALLBACK (thunar_miller_column_row_activated), column);
   g_signal_connect (column->tree_view, "button-press-event",
                     G_CALLBACK (thunar_miller_column_button_press), column);
+  g_signal_connect (column->tree_view, "key-press-event",
+                    G_CALLBACK (thunar_miller_column_key_press), column);
+  g_signal_connect (column->tree_view, "focus-in-event",
+                    G_CALLBACK (thunar_miller_column_focus_in), column);
 
   tree_column = gtk_tree_view_column_new ();
   gtk_tree_view_column_set_sizing (tree_column, GTK_TREE_VIEW_COLUMN_FIXED);
@@ -635,4 +729,12 @@ thunar_miller_column_get_folder (ThunarMillerColumn *column)
     return NULL;
 
   return thunar_standard_view_model_get_folder (column->model);
+}
+
+void
+thunar_miller_column_select_first (ThunarMillerColumn *column)
+{
+  _thunar_return_if_fail (THUNAR_IS_MILLER_COLUMN (column));
+
+  thunar_miller_column_select_first_or_last (column, TRUE);
 }
