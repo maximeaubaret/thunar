@@ -2312,30 +2312,36 @@ static gboolean
 thunar_action_manager_action_make_link (ThunarActionManager *action_mgr)
 {
   ThunarApplication *application;
+  ThunarFile        *target_directory;
+  GtkWidget         *view;
   GList             *g_files = NULL;
   GList             *lp;
 
   _thunar_return_val_if_fail (THUNAR_IS_ACTION_MANAGER (action_mgr), FALSE);
 
-  if (G_UNLIKELY (action_mgr->current_directory == NULL) || G_UNLIKELY (action_mgr->is_searching))
+  target_directory = action_mgr->current_directory;
+
+  if (THUNAR_IS_WINDOW (action_mgr->widget))
+    {
+      view = thunar_window_get_view (THUNAR_WINDOW (action_mgr->widget));
+      if (view != NULL && THUNAR_IS_NAVIGATOR (view))
+        target_directory = thunar_navigator_get_current_directory (THUNAR_NAVIGATOR (view));
+    }
+
+  if (target_directory == NULL || action_mgr->is_searching)
     return TRUE;
-  if (action_mgr->files_are_selected == FALSE || thunar_file_is_trash (action_mgr->current_directory))
+  if (action_mgr->files_are_selected == FALSE || thunar_file_is_trash (target_directory))
     return TRUE;
 
   for (lp = action_mgr->files_to_process; lp != NULL; lp = lp->next)
-    {
-      g_files = g_list_append (g_files, thunar_file_get_file (lp->data));
-    }
-  /* link the selected files into the current directory, which effectively
-   * creates new unique links for the files.
-   */
+    g_files = g_list_append (g_files, thunar_file_get_file (lp->data));
+
   application = thunar_application_get ();
   thunar_application_link_into (application, action_mgr->widget, g_files,
-                                thunar_file_get_file (action_mgr->current_directory), THUNAR_OPERATION_LOG_OPERATIONS, action_mgr->new_files_created_closure);
+                                thunar_file_get_file (target_directory), THUNAR_OPERATION_LOG_OPERATIONS, action_mgr->new_files_created_closure);
   g_object_unref (G_OBJECT (application));
   g_list_free (g_files);
 
-  /* required in case of shortcut activation, in order to signal that the accel key got handled */
   return TRUE;
 }
 
@@ -2345,32 +2351,37 @@ static gboolean
 thunar_action_manager_action_duplicate (ThunarActionManager *action_mgr)
 {
   ThunarApplication *application;
+  ThunarFile        *target_directory;
+  GtkWidget         *view;
   GList             *files_to_process;
 
   _thunar_return_val_if_fail (THUNAR_IS_ACTION_MANAGER (action_mgr), FALSE);
 
-  if (G_UNLIKELY (action_mgr->current_directory == NULL) || G_UNLIKELY (action_mgr->is_searching))
+  target_directory = action_mgr->current_directory;
+
+  if (THUNAR_IS_WINDOW (action_mgr->widget))
+    {
+      view = thunar_window_get_view (THUNAR_WINDOW (action_mgr->widget));
+      if (view != NULL && THUNAR_IS_NAVIGATOR (view))
+        target_directory = thunar_navigator_get_current_directory (THUNAR_NAVIGATOR (view));
+    }
+
+  if (target_directory == NULL || action_mgr->is_searching)
     return TRUE;
-  if (action_mgr->files_are_selected == FALSE || thunar_file_is_trash (action_mgr->current_directory))
+  if (action_mgr->files_are_selected == FALSE || thunar_file_is_trash (target_directory))
     return TRUE;
 
-  /* determine the selected files for the view */
   files_to_process = thunar_file_list_to_thunar_g_file_list (action_mgr->files_to_process);
   if (G_LIKELY (files_to_process != NULL))
     {
-      /* copy the selected files into the current directory, which effectively
-       * creates duplicates of the files.
-       */
       application = thunar_application_get ();
       thunar_application_copy_into (application, action_mgr->widget, files_to_process,
-                                    thunar_file_get_file (action_mgr->current_directory), THUNAR_OPERATION_LOG_OPERATIONS, action_mgr->new_files_created_closure);
+                                    thunar_file_get_file (target_directory), THUNAR_OPERATION_LOG_OPERATIONS, action_mgr->new_files_created_closure);
       g_object_unref (G_OBJECT (application));
 
-      /* clean up */
       thunar_g_list_free_full (files_to_process);
     }
 
-  /* required in case of shortcut activation, in order to signal that the accel key got handled */
   return TRUE;
 }
 
