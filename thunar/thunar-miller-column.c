@@ -774,3 +774,60 @@ thunar_miller_column_select_first (ThunarMillerColumn *column)
 
   thunar_miller_column_set_cursor_first_or_last (column, TRUE);
 }
+
+void
+thunar_miller_column_set_zoom_level (ThunarMillerColumn *column,
+                                     ThunarZoomLevel     zoom_level)
+{
+  ThunarIconSize icon_size;
+
+  _thunar_return_if_fail (THUNAR_IS_MILLER_COLUMN (column));
+
+  switch (zoom_level)
+    {
+    case THUNAR_ZOOM_LEVEL_25_PERCENT:
+      icon_size = THUNAR_ICON_SIZE_16;
+      break;
+    case THUNAR_ZOOM_LEVEL_38_PERCENT:
+      icon_size = THUNAR_ICON_SIZE_24;
+      break;
+    case THUNAR_ZOOM_LEVEL_50_PERCENT:
+      icon_size = THUNAR_ICON_SIZE_32;
+      break;
+    case THUNAR_ZOOM_LEVEL_75_PERCENT:
+      icon_size = THUNAR_ICON_SIZE_48;
+      break;
+    case THUNAR_ZOOM_LEVEL_100_PERCENT:
+      icon_size = THUNAR_ICON_SIZE_64;
+      break;
+    case THUNAR_ZOOM_LEVEL_150_PERCENT:
+      icon_size = THUNAR_ICON_SIZE_96;
+      break;
+    case THUNAR_ZOOM_LEVEL_200_PERCENT:
+      icon_size = THUNAR_ICON_SIZE_128;
+      break;
+    case THUNAR_ZOOM_LEVEL_250_PERCENT:
+      icon_size = THUNAR_ICON_SIZE_160;
+      break;
+    case THUNAR_ZOOM_LEVEL_300_PERCENT:
+      icon_size = THUNAR_ICON_SIZE_192;
+      break;
+    case THUNAR_ZOOM_LEVEL_400_PERCENT:
+      icon_size = THUNAR_ICON_SIZE_256;
+      break;
+    case THUNAR_ZOOM_LEVEL_800_PERCENT:
+      icon_size = THUNAR_ICON_SIZE_512;
+      break;
+    case THUNAR_ZOOM_LEVEL_1600_PERCENT:
+      icon_size = THUNAR_ICON_SIZE_1024;
+      break;
+    default:
+      icon_size = THUNAR_ICON_SIZE_64;
+      break;
+    }
+
+  g_object_set (column->icon_renderer, "size", icon_size, NULL);
+
+  /* queue resize on the tree view column to update row heights */
+  gtk_tree_view_column_queue_resize (gtk_tree_view_get_column (GTK_TREE_VIEW (column->tree_view), 0));
+}

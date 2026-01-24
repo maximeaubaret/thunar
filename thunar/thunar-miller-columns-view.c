@@ -75,6 +75,7 @@ static void thunar_miller_columns_view_update_columns (ThunarMillerColumnsView *
 static void thunar_miller_columns_view_scroll_to_active_column (ThunarMillerColumnsView *view);
 static void thunar_miller_columns_view_update_statusbar_text (ThunarMillerColumnsView *view);
 static void thunar_miller_columns_view_context_menu (ThunarMillerColumnsView *view);
+static gboolean thunar_miller_columns_view_scroll_event (GtkWidget *widget, GdkEventScroll *event, ThunarMillerColumnsView *view);
 
 enum
 {
@@ -265,7 +266,8 @@ thunar_miller_columns_view_view_init (ThunarViewIface *iface)
 static void
 thunar_miller_columns_view_init (ThunarMillerColumnsView *view)
 {
-  GtkWidget *viewport;
+  GtkWidget      *viewport;
+  ThunarZoomLevel zoom_level;
 
   view->preferences = thunar_preferences_get ();
   view->current_directory = NULL;
@@ -298,9 +300,16 @@ thunar_miller_columns_view_init (ThunarMillerColumnsView *view)
                           view, "show-hidden",
                           G_BINDING_SYNC_CREATE);
 
-  g_object_bind_property (view->preferences, "last-icon-view-zoom-level",
-                          view, "zoom-level",
-                          G_BINDING_SYNC_CREATE);
+  g_object_get (G_OBJECT (view->preferences), "last-icon-view-zoom-level", &zoom_level, NULL);
+  thunar_view_set_zoom_level (THUNAR_VIEW (view), zoom_level);
+
+  g_object_bind_property (G_OBJECT (view), "zoom-level",
+                          G_OBJECT (view->preferences), "last-icon-view-zoom-level",
+                          G_BINDING_DEFAULT);
+
+  gtk_widget_add_events (GTK_WIDGET (view), GDK_SCROLL_MASK);
+  g_signal_connect (G_OBJECT (view), "scroll-event",
+                    G_CALLBACK (thunar_miller_columns_view_scroll_event), view);
 }
 
 static void
@@ -520,11 +529,15 @@ thunar_miller_columns_view_set_zoom_level (ThunarView     *view,
                                            ThunarZoomLevel zoom_level)
 {
   ThunarMillerColumnsView *miller_view = THUNAR_MILLER_COLUMNS_VIEW (view);
+  GList                   *lp;
 
   if (miller_view->zoom_level == zoom_level)
     return;
 
   miller_view->zoom_level = zoom_level;
+  for (lp = miller_view->columns; lp != NULL; lp = lp->next)
+    thunar_miller_column_set_zoom_level (THUNAR_MILLER_COLUMN (lp->data), zoom_level);
+
   g_object_notify (G_OBJECT (view), "zoom-level");
 }
 
@@ -532,6 +545,39 @@ static void
 thunar_miller_columns_view_reset_zoom_level (ThunarView *view)
 {
   thunar_miller_columns_view_set_zoom_level (view, THUNAR_ZOOM_LEVEL_100_PERCENT);
+}
+
+static gboolean
+thunar_miller_columns_view_scroll_event (GtkWidget               *widget,
+                                         GdkEventScroll          *event,
+                                         ThunarMillerColumnsView *view)
+{
+  GdkScrollDirection scrolling_direction;
+  gboolean           misc_ctrl_scroll_wheel_to_zoom;
+
+  if (event->direction != GDK_SCROLL_SMOOTH)
+    scrolling_direction = event->direction;
+  else if (event->delta_y < 0)
+    scrolling_direction = GDK_SCROLL_UP;
+  else if (event->delta_y > 0)
+    scrolling_direction = GDK_SCROLL_DOWN;
+  else
+    return FALSE;
+
+  if ((event->state & GDK_CONTROL_MASK) != 0 && (scrolling_direction == GDK_SCROLL_UP || scrolling_direction == GDK_SCROLL_DOWN))
+    {
+      g_object_get (G_OBJECT (view->preferences), "misc-ctrl-scroll-wheel-to-zoom", &misc_ctrl_scroll_wheel_to_zoom, NULL);
+      if (misc_ctrl_scroll_wheel_to_zoom)
+        {
+          thunar_view_set_zoom_level (THUNAR_VIEW (view),
+                                      (scrolling_direction == GDK_SCROLL_UP)
+                                      ? MIN (view->zoom_level + 1, THUNAR_ZOOM_N_LEVELS - 1)
+                                      : MAX (view->zoom_level, 1) - 1);
+          return TRUE;
+        }
+    }
+
+  return FALSE;
 }
 
 static void
@@ -781,6 +827,7 @@ thunar_miller_columns_view_column_selection_changed (ThunarMillerColumn      *co
       if (g_list_length (view->columns) == (guint) (column_index + 1))
         {
           GtkWidget *new_column = thunar_miller_column_new ();
+          thunar_miller_column_set_zoom_level (THUNAR_MILLER_COLUMN (new_column), view->zoom_level);
           thunar_miller_column_set_show_hidden (THUNAR_MILLER_COLUMN (new_column), view->show_hidden);
           thunar_miller_column_set_directory (THUNAR_MILLER_COLUMN (new_column), selected_file);
 
@@ -885,6 +932,7 @@ thunar_miller_columns_view_update_columns (ThunarMillerColumnsView *view)
       directory = THUNAR_FILE (lp->data);
 
       column_widget = thunar_miller_column_new ();
+      thunar_miller_column_set_zoom_level (THUNAR_MILLER_COLUMN (column_widget), view->zoom_level);
       thunar_miller_column_set_show_hidden (THUNAR_MILLER_COLUMN (column_widget), view->show_hidden);
       thunar_miller_column_set_directory (THUNAR_MILLER_COLUMN (column_widget), directory);
 
@@ -919,6 +967,7 @@ thunar_miller_columns_view_update_columns (ThunarMillerColumnsView *view)
     }
 
   column_widget = thunar_miller_column_new ();
+  thunar_miller_column_set_zoom_level (THUNAR_MILLER_COLUMN (column_widget), view->zoom_level);
   thunar_miller_column_set_show_hidden (THUNAR_MILLER_COLUMN (column_widget), view->show_hidden);
   thunar_miller_column_set_directory (THUNAR_MILLER_COLUMN (column_widget), view->current_directory);
   thunar_miller_column_set_active (THUNAR_MILLER_COLUMN (column_widget), TRUE);

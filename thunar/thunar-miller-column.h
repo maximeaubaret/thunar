@@ -23,6 +23,7 @@
 #include "thunar/thunar-file.h"
 #include "thunar/thunar-folder.h"
 #include "thunar/thunar-list-model.h"
+#include "thunar/thunar-enum-types.h"
 
 #include <gtk/gtk.h>
 
@@ -90,6 +91,10 @@ thunar_miller_column_get_folder (ThunarMillerColumn *column);
 
 void
 thunar_miller_column_select_first (ThunarMillerColumn *column);
+
+void
+thunar_miller_column_set_zoom_level (ThunarMillerColumn *column,
+                                     ThunarZoomLevel     zoom_level);
 
 G_END_DECLS;
 
