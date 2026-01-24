@@ -41,6 +41,7 @@ enum
 {
   SIGNAL_FILE_ACTIVATED,
   SIGNAL_SELECTION_CHANGED,
+  SIGNAL_CONTEXT_MENU,
   LAST_SIGNAL
 };
 
@@ -194,6 +195,29 @@ thunar_miller_column_button_press (GtkWidget          *widget,
           gtk_tree_path_free (path);
         }
     }
+  else if (event->button == 3 && event->type == GDK_BUTTON_PRESS)
+    {
+      selection = gtk_tree_view_get_selection (GTK_TREE_VIEW (widget));
+
+      if (gtk_tree_view_get_path_at_pos (GTK_TREE_VIEW (widget),
+                                         (gint) event->x, (gint) event->y,
+                                         &path, NULL, NULL, NULL))
+        {
+          if (!gtk_tree_selection_path_is_selected (selection, path))
+            {
+              gtk_tree_selection_unselect_all (selection);
+              gtk_tree_selection_select_path (selection, path);
+            }
+          gtk_tree_path_free (path);
+        }
+      else
+        {
+          gtk_tree_selection_unselect_all (selection);
+        }
+
+      g_signal_emit (column, miller_column_signals[SIGNAL_CONTEXT_MENU], 0);
+      return TRUE;
+    }
 
   return FALSE;
 }
@@ -250,6 +274,14 @@ thunar_miller_column_class_init (ThunarMillerColumnClass *klass)
 
   miller_column_signals[SIGNAL_SELECTION_CHANGED] =
     g_signal_new ("selection-changed",
+                  G_TYPE_FROM_CLASS (klass),
+                  G_SIGNAL_RUN_LAST,
+                  0, NULL, NULL,
+                  g_cclosure_marshal_VOID__VOID,
+                  G_TYPE_NONE, 0);
+
+  miller_column_signals[SIGNAL_CONTEXT_MENU] =
+    g_signal_new ("context-menu",
                   G_TYPE_FROM_CLASS (klass),
                   G_SIGNAL_RUN_LAST,
                   0, NULL, NULL,

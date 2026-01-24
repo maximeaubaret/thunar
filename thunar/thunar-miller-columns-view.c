@@ -26,7 +26,9 @@
 #include "thunar/thunar-folder.h"
 #include "thunar/thunar-gio-extensions.h"
 #include "thunar/thunar-gobject-extensions.h"
+#include "thunar/thunar-gtk-extensions.h"
 #include "thunar/thunar-history.h"
+#include "thunar/thunar-menu.h"
 #include "thunar/thunar-miller-column.h"
 #include "thunar/thunar-navigator.h"
 #include "thunar/thunar-preferences.h"
@@ -65,9 +67,11 @@ static void thunar_miller_columns_view_set_selected_files (ThunarView *view, GLi
 
 static void thunar_miller_columns_view_column_file_activated (ThunarMillerColumn *column, ThunarFile *file, ThunarMillerColumnsView *view);
 static void thunar_miller_columns_view_column_selection_changed (ThunarMillerColumn *column, ThunarMillerColumnsView *view);
+static void thunar_miller_columns_view_column_context_menu (ThunarMillerColumn *column, ThunarMillerColumnsView *view);
 static void thunar_miller_columns_view_update_columns (ThunarMillerColumnsView *view);
 static void thunar_miller_columns_view_scroll_to_active_column (ThunarMillerColumnsView *view);
 static void thunar_miller_columns_view_update_statusbar_text (ThunarMillerColumnsView *view);
+static void thunar_miller_columns_view_context_menu (ThunarMillerColumnsView *view);
 
 enum
 {
@@ -620,6 +624,62 @@ thunar_miller_columns_view_column_file_activated (ThunarMillerColumn      *colum
 }
 
 static void
+thunar_miller_columns_view_column_context_menu (ThunarMillerColumn      *column,
+                                                ThunarMillerColumnsView *view)
+{
+  thunar_miller_columns_view_context_menu (view);
+}
+
+static void
+thunar_miller_columns_view_context_menu (ThunarMillerColumnsView *view)
+{
+  GtkWidget  *window;
+  ThunarMenu *context_menu;
+  GList      *selected_files;
+
+  g_object_ref (G_OBJECT (view));
+
+  selected_files = thunar_miller_columns_view_get_selected_files (THUNAR_VIEW (view));
+  window = gtk_widget_get_toplevel (GTK_WIDGET (view));
+
+  context_menu = g_object_new (THUNAR_TYPE_MENU, "menu-type", THUNAR_MENU_TYPE_CONTEXT_TREE_VIEW,
+                               "action_mgr", thunar_window_get_action_manager (THUNAR_WINDOW (window)), NULL);
+
+  if (selected_files != NULL)
+    {
+      thunar_menu_add_sections (context_menu, THUNAR_MENU_SECTION_OPEN
+                                              | THUNAR_MENU_SECTION_SENDTO
+                                              | THUNAR_MENU_SECTION_CUT
+                                              | THUNAR_MENU_SECTION_COPY_PASTE
+                                              | THUNAR_MENU_SECTION_TRASH_DELETE
+                                              | THUNAR_MENU_SECTION_EMPTY_TRASH
+                                              | THUNAR_MENU_SECTION_RENAME
+                                              | THUNAR_MENU_SECTION_RESTORE
+                                              | THUNAR_MENU_SECTION_REMOVE_FROM_RECENT
+                                              | THUNAR_MENU_SECTION_CUSTOM_ACTIONS
+                                              | THUNAR_MENU_SECTION_PROPERTIES);
+    }
+  else
+    {
+      thunar_menu_add_sections (context_menu, THUNAR_MENU_SECTION_CREATE_NEW_FILES
+                                              | THUNAR_MENU_SECTION_COPY_PASTE
+                                              | THUNAR_MENU_SECTION_EMPTY_TRASH
+                                              | THUNAR_MENU_SECTION_CUSTOM_ACTIONS
+                                              | THUNAR_MENU_SECTION_ZOOM
+                                              | THUNAR_MENU_SECTION_PROPERTIES);
+    }
+
+  thunar_gtk_menu_hide_accel_labels (GTK_MENU (context_menu));
+  gtk_widget_show_all (GTK_WIDGET (context_menu));
+  thunar_window_redirect_menu_tooltips_to_statusbar (THUNAR_WINDOW (window), GTK_MENU (context_menu));
+
+  thunar_gtk_menu_run (GTK_MENU (context_menu));
+
+  g_list_free_full (selected_files, g_object_unref);
+  g_object_unref (G_OBJECT (view));
+}
+
+static void
 thunar_miller_columns_view_column_selection_changed (ThunarMillerColumn      *column,
                                                      ThunarMillerColumnsView *view)
 {
@@ -660,6 +720,8 @@ thunar_miller_columns_view_column_selection_changed (ThunarMillerColumn      *co
                             G_CALLBACK (thunar_miller_columns_view_column_file_activated), view);
           g_signal_connect (new_column, "selection-changed",
                             G_CALLBACK (thunar_miller_columns_view_column_selection_changed), view);
+          g_signal_connect (new_column, "context-menu",
+                            G_CALLBACK (thunar_miller_columns_view_column_context_menu), view);
 
           view->columns = g_list_append (view->columns, new_column);
           gtk_box_pack_start (GTK_BOX (view->columns_box), new_column, FALSE, FALSE, 0);
@@ -756,6 +818,8 @@ thunar_miller_columns_view_update_columns (ThunarMillerColumnsView *view)
                         G_CALLBACK (thunar_miller_columns_view_column_file_activated), view);
       g_signal_connect (column_widget, "selection-changed",
                         G_CALLBACK (thunar_miller_columns_view_column_selection_changed), view);
+      g_signal_connect (column_widget, "context-menu",
+                        G_CALLBACK (thunar_miller_columns_view_column_context_menu), view);
       g_signal_connect (column_widget, "notify::loading",
                         G_CALLBACK (thunar_miller_columns_view_column_notify_loading), view);
 
@@ -783,6 +847,8 @@ thunar_miller_columns_view_update_columns (ThunarMillerColumnsView *view)
                     G_CALLBACK (thunar_miller_columns_view_column_file_activated), view);
   g_signal_connect (column_widget, "selection-changed",
                     G_CALLBACK (thunar_miller_columns_view_column_selection_changed), view);
+  g_signal_connect (column_widget, "context-menu",
+                    G_CALLBACK (thunar_miller_columns_view_column_context_menu), view);
   g_signal_connect (column_widget, "notify::loading",
                     G_CALLBACK (thunar_miller_columns_view_column_notify_loading), view);
 
