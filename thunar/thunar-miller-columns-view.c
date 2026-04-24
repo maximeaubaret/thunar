@@ -164,7 +164,9 @@ struct _ThunarMillerColumnsView
   GtkWidget         *drop_highlight_column;
   guint              pending_directory_source_id;
   gint               pending_directory_column_index;
+  gint               pending_focus_column_index;
   gint               applying_directory_change_column_index;
+  gint               applying_focus_column_index;
   gboolean           pending_grab_focus;
   gboolean           drop_data_ready;
   gboolean           drop_occurred;
@@ -320,6 +322,7 @@ thunar_miller_columns_view_cancel_pending_directory_change (ThunarMillerColumnsV
 
   g_clear_object (&view->pending_directory);
   view->pending_directory_column_index = -1;
+  view->pending_focus_column_index = -1;
   view->pending_grab_focus = FALSE;
 }
 
@@ -337,14 +340,17 @@ thunar_miller_columns_view_emit_pending_directory_change (gpointer user_data)
 
   directory = view->pending_directory;
   view->applying_directory_change_column_index = view->pending_directory_column_index;
+  view->applying_focus_column_index = view->pending_focus_column_index;
   grab_focus = view->pending_grab_focus;
 
   view->pending_directory = NULL;
   view->pending_directory_column_index = -1;
+  view->pending_focus_column_index = -1;
   view->pending_grab_focus = FALSE;
 
   thunar_navigator_change_directory (THUNAR_NAVIGATOR (view), directory, grab_focus);
   view->applying_directory_change_column_index = -1;
+  view->applying_focus_column_index = -1;
   g_object_unref (directory);
 
   return G_SOURCE_REMOVE;
@@ -354,7 +360,8 @@ static void
 thunar_miller_columns_view_queue_directory_change (ThunarMillerColumnsView *view,
                                                    ThunarFile              *directory,
                                                    gint                     column_index,
-                                                   gboolean                 grab_focus)
+                                                   gboolean                 grab_focus,
+                                                   gint                     focus_column_index)
 {
   _thunar_return_if_fail (THUNAR_IS_MILLER_COLUMNS_VIEW (view));
   _thunar_return_if_fail (THUNAR_IS_FILE (directory));
@@ -362,12 +369,15 @@ thunar_miller_columns_view_queue_directory_change (ThunarMillerColumnsView *view
   if (view->pending_directory != NULL && view->pending_directory == directory)
     {
       view->pending_directory_column_index = column_index;
+      if (focus_column_index >= 0)
+        view->pending_focus_column_index = focus_column_index;
       view->pending_grab_focus = view->pending_grab_focus || grab_focus;
       return;
     }
 
   g_set_object (&view->pending_directory, directory);
   view->pending_directory_column_index = column_index;
+  view->pending_focus_column_index = focus_column_index;
   view->pending_grab_focus = grab_focus;
 
   if (view->pending_directory_source_id == 0)
@@ -1023,6 +1033,9 @@ thunar_miller_columns_view_update_columns_incremental (ThunarMillerColumnsView *
 {
   ThunarFile *source_directory;
   GtkWidget  *source_column;
+  gint        active_column_index;
+  gboolean    focus_active_column;
+  gint        n_columns;
 
   if (directory == NULL || source_column_index < 0)
     return FALSE;
@@ -1040,7 +1053,12 @@ thunar_miller_columns_view_update_columns_incremental (ThunarMillerColumnsView *
   else
     {
       thunar_miller_columns_view_append_column (view, directory);
-      thunar_miller_columns_view_set_active_column (view, source_column_index, grab_focus);
+      n_columns = g_list_length (view->columns);
+      active_column_index = view->applying_focus_column_index >= 0
+                          ? MIN (view->applying_focus_column_index, n_columns - 1)
+                          : source_column_index;
+      focus_active_column = grab_focus || view->applying_focus_column_index >= 0;
+      thunar_miller_columns_view_set_active_column (view, active_column_index, focus_active_column);
     }
   thunar_miller_columns_view_update_opened_files (view);
   view->rebuilding = FALSE;
@@ -1064,7 +1082,7 @@ thunar_miller_columns_view_column_file_activated (ThunarMillerColumn      *colum
   if (thunar_file_is_directory (file))
     {
       column_index = g_list_index (view->columns, column);
-      thunar_miller_columns_view_queue_directory_change (view, file, column_index, TRUE);
+      thunar_miller_columns_view_queue_directory_change (view, file, column_index, TRUE, -1);
       return;
     }
 
@@ -1158,7 +1176,7 @@ thunar_miller_columns_view_column_navigate_right (ThunarMillerColumn      *colum
 
   selected_file = thunar_miller_column_get_selected_file (column);
   if (selected_file != NULL && thunar_file_is_directory (selected_file))
-    thunar_miller_columns_view_queue_directory_change (view, selected_file, column_index, TRUE);
+    thunar_miller_columns_view_queue_directory_change (view, selected_file, column_index, TRUE, column_index + 1);
   if (selected_file != NULL)
     g_object_unref (selected_file);
 }
@@ -1205,7 +1223,7 @@ thunar_miller_columns_view_column_selection_changed (ThunarMillerColumn      *co
         next_directory = thunar_miller_column_get_directory (THUNAR_MILLER_COLUMN (next_column));
 
       if (selected_file != view->current_directory && selected_file != next_directory)
-        thunar_miller_columns_view_queue_directory_change (view, selected_file, column_index, TRUE);
+        thunar_miller_columns_view_queue_directory_change (view, selected_file, column_index, TRUE, -1);
     }
 
   if (selected_file != NULL)
@@ -1919,7 +1937,9 @@ thunar_miller_columns_view_init (ThunarMillerColumnsView *view)
 
   view->preferences = thunar_preferences_get ();
   view->pending_directory_column_index = -1;
+  view->pending_focus_column_index = -1;
   view->applying_directory_change_column_index = -1;
+  view->applying_focus_column_index = -1;
   view->sort_column = THUNAR_COLUMN_NAME;
   view->sort_column_default = THUNAR_COLUMN_NAME;
   view->sort_order = GTK_SORT_ASCENDING;

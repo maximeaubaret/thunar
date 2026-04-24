@@ -16,6 +16,7 @@
 #include "thunar/thunar-text-renderer.h"
 
 #include <gdk/gdkkeysyms.h>
+#include <libxfce4ui/libxfce4ui.h>
 
 enum
 {
@@ -51,6 +52,9 @@ static void thunar_miller_column_cell_data_func (GtkTreeViewColumn *tree_column,
                                                  gpointer           user_data);
 static gboolean thunar_miller_column_draw (GtkWidget *widget,
                                            cairo_t   *cr);
+static gint thunar_miller_column_key_snooper (GtkWidget   *grab_widget,
+                                              GdkEventKey *event,
+                                              gpointer     user_data);
 
 struct _ThunarMillerColumnClass
 {
@@ -69,10 +73,13 @@ struct _ThunarMillerColumn
   GtkCellRenderer     *name_renderer;
   ThunarColumn         sort_column;
   GtkSortType          sort_order;
+  guint                search_timeout_id;
+  guint                key_snooper_id;
   gboolean             show_hidden;
   gboolean             active;
   gboolean             loading;
   gboolean             folders_first;
+  gboolean             search_active;
 };
 
 G_DEFINE_TYPE (ThunarMillerColumn, thunar_miller_column, GTK_TYPE_SCROLLED_WINDOW)
@@ -121,6 +128,56 @@ thunar_miller_column_draw (GtkWidget *widget,
   cairo_restore (cr);
 
   return result;
+}
+
+static void
+thunar_miller_column_clear_search_active (ThunarMillerColumn *column)
+{
+  if (column->search_timeout_id != 0)
+    {
+      g_source_remove (column->search_timeout_id);
+      column->search_timeout_id = 0;
+    }
+
+  column->search_active = FALSE;
+}
+
+static gboolean
+thunar_miller_column_search_timeout (gpointer user_data)
+{
+  ThunarMillerColumn *column = THUNAR_MILLER_COLUMN (user_data);
+
+  column->search_timeout_id = 0;
+  column->search_active = FALSE;
+
+  return G_SOURCE_REMOVE;
+}
+
+static void
+thunar_miller_column_note_search_active (ThunarMillerColumn *column)
+{
+  column->search_active = TRUE;
+
+  if (column->search_timeout_id != 0)
+    g_source_remove (column->search_timeout_id);
+
+  column->search_timeout_id = g_timeout_add_seconds_full (G_PRIORITY_DEFAULT,
+                                                          5,
+                                                          thunar_miller_column_search_timeout,
+                                                          g_object_ref (column),
+                                                          g_object_unref);
+}
+
+static gboolean
+thunar_miller_column_event_starts_search (GdkEventKey *event)
+{
+  GdkModifierType modifiers;
+
+  modifiers = event->state & gtk_accelerator_get_default_mod_mask ();
+  if ((modifiers & ~(GDK_SHIFT_MASK | GDK_LOCK_MASK)) != 0)
+    return FALSE;
+
+  return gdk_keyval_to_unicode (event->keyval) != 0;
 }
 
 static void
@@ -327,6 +384,15 @@ thunar_miller_column_finalize (GObject *object)
 {
   ThunarMillerColumn *column = THUNAR_MILLER_COLUMN (object);
 
+  thunar_miller_column_clear_search_active (column);
+  if (column->key_snooper_id != 0)
+    {
+      G_GNUC_BEGIN_IGNORE_DEPRECATIONS
+      gtk_key_snooper_remove (column->key_snooper_id);
+      G_GNUC_END_IGNORE_DEPRECATIONS
+      column->key_snooper_id = 0;
+    }
+
   if (column->directory != NULL)
     g_object_unref (column->directory);
   if (column->opened_file != NULL)
@@ -487,6 +553,17 @@ thunar_miller_column_key_press (GtkWidget          *widget,
       g_signal_emit (column, miller_column_signals[SIGNAL_NAVIGATE_RIGHT], 0);
       return TRUE;
 
+    case GDK_KEY_Tab:
+    case GDK_KEY_KP_Tab:
+      thunar_miller_column_clear_search_active (column);
+      g_signal_emit (column, miller_column_signals[SIGNAL_NAVIGATE_RIGHT], 0);
+      return TRUE;
+
+    case GDK_KEY_ISO_Left_Tab:
+      thunar_miller_column_clear_search_active (column);
+      g_signal_emit (column, miller_column_signals[SIGNAL_NAVIGATE_LEFT], 0);
+      return TRUE;
+
     case GDK_KEY_Up:
     case GDK_KEY_KP_Up:
       gtk_tree_view_get_cursor (GTK_TREE_VIEW (column->tree_view), &cursor_path, NULL);
@@ -510,6 +587,48 @@ thunar_miller_column_key_press (GtkWidget          *widget,
       return thunar_miller_column_cursor_is_first_or_last (column, FALSE);
 
     default:
+      if (thunar_miller_column_event_starts_search (event))
+        thunar_miller_column_note_search_active (column);
+      return FALSE;
+    }
+}
+
+static gint
+thunar_miller_column_key_snooper (GtkWidget   *grab_widget,
+                                  GdkEventKey *event,
+                                  gpointer     user_data)
+{
+  ThunarMillerColumn *column = THUNAR_MILLER_COLUMN (user_data);
+  GdkModifierType     modifiers;
+  gboolean            backwards;
+
+  if (event->type != GDK_KEY_PRESS)
+    return FALSE;
+
+  if (!column->search_active)
+    return FALSE;
+
+  switch (event->keyval)
+    {
+    case GDK_KEY_Tab:
+    case GDK_KEY_KP_Tab:
+    case GDK_KEY_ISO_Left_Tab:
+      modifiers = event->state & gtk_accelerator_get_default_mod_mask ();
+      backwards = event->keyval == GDK_KEY_ISO_Left_Tab || (modifiers & GDK_SHIFT_MASK) != 0;
+
+      thunar_miller_column_clear_search_active (column);
+      g_signal_emit (column, miller_column_signals[backwards ? SIGNAL_NAVIGATE_LEFT : SIGNAL_NAVIGATE_RIGHT], 0);
+      return TRUE;
+
+    case GDK_KEY_Escape:
+    case GDK_KEY_Return:
+    case GDK_KEY_KP_Enter:
+      thunar_miller_column_clear_search_active (column);
+      return FALSE;
+
+    default:
+      if (thunar_miller_column_event_starts_search (event))
+        thunar_miller_column_note_search_active (column);
       return FALSE;
     }
 }
@@ -633,12 +752,15 @@ thunar_miller_column_init (ThunarMillerColumn *column)
                                   GTK_POLICY_AUTOMATIC);
   gtk_scrolled_window_set_shadow_type (GTK_SCROLLED_WINDOW (column), GTK_SHADOW_NONE);
 
-  column->tree_view = gtk_tree_view_new ();
+  column->tree_view = xfce_tree_view_new ();
   column->sort_column = THUNAR_COLUMN_NAME;
   column->sort_order = GTK_SORT_ASCENDING;
   column->folders_first = TRUE;
+  G_GNUC_BEGIN_IGNORE_DEPRECATIONS
+  column->key_snooper_id = gtk_key_snooper_install (thunar_miller_column_key_snooper, column);
+  G_GNUC_END_IGNORE_DEPRECATIONS
   gtk_tree_view_set_headers_visible (GTK_TREE_VIEW (column->tree_view), FALSE);
-  gtk_tree_view_set_enable_search (GTK_TREE_VIEW (column->tree_view), FALSE);
+  gtk_tree_view_set_enable_search (GTK_TREE_VIEW (column->tree_view), TRUE);
   gtk_tree_view_set_show_expanders (GTK_TREE_VIEW (column->tree_view), FALSE);
   gtk_tree_view_set_level_indentation (GTK_TREE_VIEW (column->tree_view), 0);
   gtk_tree_view_set_rubber_banding (GTK_TREE_VIEW (column->tree_view), TRUE);
@@ -1016,7 +1138,6 @@ thunar_miller_column_set_active (ThunarMillerColumn *column,
     return;
 
   column->active = active;
-  gtk_tree_view_set_enable_search (GTK_TREE_VIEW (column->tree_view), active);
 
   g_object_notify (G_OBJECT (column), "active");
 }
