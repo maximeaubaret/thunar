@@ -12,6 +12,7 @@
 
 #include "thunar/thunar-action-manager.h"
 #include "thunar/thunar-component.h"
+#include "thunar/thunar-dnd.h"
 #include "thunar/thunar-folder.h"
 #include "thunar/thunar-gio-extensions.h"
 #include "thunar/thunar-gobject-extensions.h"
@@ -34,6 +35,11 @@ static void thunar_miller_columns_view_view_init (ThunarViewIface *iface);
 static void thunar_miller_columns_view_connect_column (ThunarMillerColumnsView *view,
                                                        GtkWidget               *column_widget);
 static void thunar_miller_columns_view_sync_action_directory (ThunarMillerColumnsView *view);
+static void thunar_miller_columns_view_update_file_drag_mode (ThunarMillerColumnsView *view);
+static void thunar_miller_columns_view_drag_leave (GtkWidget               *widget,
+                                                   GdkDragContext          *context,
+                                                   guint                    timestamp,
+                                                   ThunarMillerColumnsView *view);
 
 enum
 {
@@ -60,7 +66,22 @@ enum
   LAST_SIGNAL,
 };
 
+enum
+{
+  TARGET_TEXT_URI_LIST,
+};
+
 static guint miller_columns_view_signals[LAST_SIGNAL];
+
+static const GtkTargetEntry drag_targets[] =
+{
+  { "text/uri-list", 0, TARGET_TEXT_URI_LIST, },
+};
+
+static const GtkTargetEntry drop_targets[] =
+{
+  { "text/uri-list", 0, TARGET_TEXT_URI_LIST, },
+};
 
 struct _ThunarMillerColumnsViewClass
 {
@@ -89,10 +110,15 @@ struct _ThunarMillerColumnsView
   GtkAccelGroup     *accel_group;
   ThunarHistory     *history;
   ThunarFile        *pending_directory;
+  GList             *drag_g_file_list;
+  GList             *drop_file_list;
+  GtkWidget         *drop_highlight_column;
   guint              pending_directory_source_id;
   gint               pending_directory_column_index;
   gint               applying_directory_change_column_index;
   gboolean           pending_grab_focus;
+  gboolean           drop_data_ready;
+  gboolean           drop_occurred;
   gchar             *statusbar_text;
 };
 
@@ -196,8 +222,12 @@ thunar_miller_columns_view_set_active_column (ThunarMillerColumnsView *view,
   view->active_column_index = active_column_index;
 
   for (lp = view->columns, i = 0; lp != NULL; lp = lp->next, ++i)
-    thunar_miller_column_set_active (THUNAR_MILLER_COLUMN (lp->data),
-                                     i == active_column_index && grab_focus);
+    {
+      thunar_miller_column_set_active (THUNAR_MILLER_COLUMN (lp->data),
+                                       i == active_column_index && grab_focus);
+      if (i != active_column_index)
+        thunar_miller_column_set_selected_file (THUNAR_MILLER_COLUMN (lp->data), NULL);
+    }
 
   thunar_miller_columns_view_sync_action_directory (view);
 
@@ -233,6 +263,338 @@ thunar_miller_columns_view_sync_action_directory (ThunarMillerColumnsView *view)
 
   action_mgr = thunar_window_get_action_manager (THUNAR_WINDOW (window));
   thunar_navigator_set_current_directory (THUNAR_NAVIGATOR (action_mgr), directory, FALSE);
+}
+
+static ThunarMillerColumn *
+thunar_miller_columns_view_get_column_for_drag_widget (GtkWidget *widget)
+{
+  gpointer column;
+
+  column = g_object_get_data (G_OBJECT (widget), "thunar-miller-column");
+  return THUNAR_IS_MILLER_COLUMN (column) ? THUNAR_MILLER_COLUMN (column) : NULL;
+}
+
+static void
+thunar_miller_columns_view_set_drop_highlight_column (ThunarMillerColumnsView *view,
+                                                      ThunarMillerColumn      *column)
+{
+  GtkWidget *widget = column != NULL ? GTK_WIDGET (column) : NULL;
+  GtkWidget *tree_view;
+
+  if (view->drop_highlight_column == widget)
+    return;
+
+  if (view->drop_highlight_column != NULL)
+    {
+      gtk_style_context_remove_class (gtk_widget_get_style_context (view->drop_highlight_column),
+                                      "miller-column-drop-target");
+      tree_view = thunar_miller_column_get_tree_view (THUNAR_MILLER_COLUMN (view->drop_highlight_column));
+      if (tree_view != NULL)
+        gtk_tree_view_set_drag_dest_row (GTK_TREE_VIEW (tree_view), NULL, 0);
+    }
+
+  view->drop_highlight_column = widget;
+
+  if (view->drop_highlight_column != NULL)
+    gtk_style_context_add_class (gtk_widget_get_style_context (view->drop_highlight_column),
+                                 "miller-column-drop-target");
+}
+
+static void
+thunar_miller_columns_view_update_opened_files (ThunarMillerColumnsView *view)
+{
+  GList      *lp;
+  ThunarFile *opened_file;
+
+  for (lp = view->columns; lp != NULL; lp = lp->next)
+    {
+      opened_file = lp->next != NULL
+                  ? thunar_miller_column_get_directory (THUNAR_MILLER_COLUMN (lp->next->data))
+                  : NULL;
+      thunar_miller_column_set_opened_file (THUNAR_MILLER_COLUMN (lp->data), opened_file);
+    }
+}
+
+static GdkDragAction
+thunar_miller_columns_view_get_dest_actions (ThunarMillerColumnsView *view,
+                                             ThunarMillerColumn      *column,
+                                             GdkDragContext          *context,
+                                             gint                     x,
+                                             gint                     y,
+                                             guint                    timestamp,
+                                             ThunarFile             **file_return)
+{
+  GdkDragAction  actions = 0;
+  GdkDragAction  action = 0;
+  GtkTreePath   *path = NULL;
+  GtkWidget     *tree_view;
+  ThunarFile    *file;
+
+  file = thunar_miller_column_get_drop_file (column, x, y, &path);
+  if (file != NULL)
+    {
+      actions = thunar_file_accepts_drop (file, view->drop_file_list, context, &action);
+      if (actions != 0 && file_return != NULL)
+        *file_return = g_object_ref (file);
+    }
+
+  if (action == 0 && path != NULL)
+    {
+      gtk_tree_path_free (path);
+      path = NULL;
+    }
+
+  thunar_miller_column_set_drop_file (column, action != 0 ? file : NULL);
+  thunar_miller_columns_view_set_drop_highlight_column (view, action != 0 && path == NULL ? column : NULL);
+  tree_view = thunar_miller_column_get_tree_view (column);
+  if (tree_view != NULL)
+    gtk_tree_view_set_drag_dest_row (GTK_TREE_VIEW (tree_view),
+                                     action != 0 ? path : NULL,
+                                     GTK_TREE_VIEW_DROP_INTO_OR_AFTER);
+  gdk_drag_status (context, action, timestamp);
+
+  if (file != NULL)
+    g_object_unref (file);
+  if (path != NULL)
+    gtk_tree_path_free (path);
+
+  return actions;
+}
+
+static void
+thunar_miller_columns_view_drag_data_get (GtkWidget               *widget,
+                                          GdkDragContext          *context,
+                                          GtkSelectionData        *selection_data,
+                                          guint                    info,
+                                          guint                    timestamp,
+                                          ThunarMillerColumnsView *view)
+{
+  gchar **uris;
+
+  if (info != TARGET_TEXT_URI_LIST || view->drag_g_file_list == NULL)
+    return;
+
+  uris = thunar_g_file_list_to_stringv (view->drag_g_file_list);
+  gtk_selection_data_set_uris (selection_data, uris);
+  g_strfreev (uris);
+}
+
+static void
+thunar_miller_columns_view_drag_begin (GtkWidget               *widget,
+                                       GdkDragContext          *context,
+                                       ThunarMillerColumnsView *view)
+{
+  ThunarMillerColumn *column;
+  GList              *selected_files;
+
+  thunar_g_list_free_full (view->drag_g_file_list);
+  view->drag_g_file_list = NULL;
+
+  column = thunar_miller_columns_view_get_column_for_drag_widget (widget);
+  if (column == NULL)
+    return;
+
+  selected_files = thunar_miller_column_get_selected_files (column);
+  view->drag_g_file_list = thunar_file_list_to_thunar_g_file_list (selected_files);
+  g_list_free_full (selected_files, g_object_unref);
+}
+
+static void
+thunar_miller_columns_view_drag_data_delete (GtkWidget               *widget,
+                                             GdkDragContext          *context,
+                                             ThunarMillerColumnsView *view)
+{
+  g_signal_stop_emission_by_name (G_OBJECT (widget), "drag-data-delete");
+}
+
+static void
+thunar_miller_columns_view_drag_end (GtkWidget               *widget,
+                                     GdkDragContext          *context,
+                                     ThunarMillerColumnsView *view)
+{
+  thunar_g_list_free_full (view->drag_g_file_list);
+  view->drag_g_file_list = NULL;
+}
+
+static gboolean
+thunar_miller_columns_view_drag_motion (GtkWidget               *widget,
+                                        GdkDragContext          *context,
+                                        gint                     x,
+                                        gint                     y,
+                                        guint                    timestamp,
+                                        ThunarMillerColumnsView *view)
+{
+  ThunarMillerColumn *column;
+  GdkAtom             target;
+
+  column = thunar_miller_columns_view_get_column_for_drag_widget (widget);
+  if (column == NULL)
+    return FALSE;
+
+  if (!view->drop_data_ready)
+    {
+      target = gtk_drag_dest_find_target (widget, context, NULL);
+      if (target == gdk_atom_intern_static_string ("text/uri-list"))
+        gtk_drag_get_data (widget, context, target, timestamp);
+
+      gdk_drag_status (context, 0, timestamp);
+      return TRUE;
+    }
+
+  thunar_miller_columns_view_get_dest_actions (view, column, context, x, y, timestamp, NULL);
+  return TRUE;
+}
+
+static gboolean
+thunar_miller_columns_view_receive_text_uri_list (GtkWidget               *widget,
+                                                  GdkDragContext          *context,
+                                                  gint                     x,
+                                                  gint                     y,
+                                                  guint                    timestamp,
+                                                  ThunarMillerColumnsView *view)
+{
+  ThunarMillerColumn *column;
+  GdkDragAction       actions;
+  GdkDragAction       action;
+  ThunarFile         *file = NULL;
+  gint                column_index;
+  gboolean            succeed = FALSE;
+
+  column = thunar_miller_columns_view_get_column_for_drag_widget (widget);
+  if (column == NULL)
+    return FALSE;
+
+  actions = thunar_miller_columns_view_get_dest_actions (view, column, context, x, y, timestamp, &file);
+  if ((actions & (GDK_ACTION_COPY | GDK_ACTION_MOVE | GDK_ACTION_LINK)) != 0 && file != NULL)
+    {
+      action = (gdk_drag_context_get_selected_action (context) == GDK_ACTION_ASK)
+             ? thunar_dnd_ask (GTK_WIDGET (view), file, view->drop_file_list, actions)
+             : gdk_drag_context_get_selected_action (context);
+
+      if (action != 0)
+        {
+          column_index = g_list_index (view->columns, column);
+          if (column_index >= 0)
+            thunar_miller_columns_view_set_active_column (view, column_index, FALSE);
+
+          succeed = thunar_dnd_perform (GTK_WIDGET (view), file, view->drop_file_list, action, NULL);
+        }
+    }
+
+  if (file != NULL)
+    g_object_unref (file);
+
+  return succeed;
+}
+
+static gboolean
+thunar_miller_columns_view_drag_drop (GtkWidget               *widget,
+                                      GdkDragContext          *context,
+                                      gint                     x,
+                                      gint                     y,
+                                      guint                    timestamp,
+                                      ThunarMillerColumnsView *view)
+{
+  GdkAtom target;
+
+  target = gtk_drag_dest_find_target (widget, context, NULL);
+  if (target == GDK_NONE)
+    return FALSE;
+
+  view->drop_occurred = TRUE;
+  gtk_drag_get_data (widget, context, target, timestamp);
+
+  return TRUE;
+}
+
+static void
+thunar_miller_columns_view_drag_data_received (GtkWidget               *widget,
+                                               GdkDragContext          *context,
+                                               gint                     x,
+                                               gint                     y,
+                                               GtkSelectionData        *selection_data,
+                                               guint                    info,
+                                               guint                    timestamp,
+                                               ThunarMillerColumnsView *view)
+{
+  gboolean succeed = FALSE;
+
+  if (!view->drop_data_ready)
+    {
+      if (info == TARGET_TEXT_URI_LIST
+          && gtk_selection_data_get_format (selection_data) == 8
+          && gtk_selection_data_get_length (selection_data) > 0)
+        {
+          view->drop_file_list = thunar_g_file_list_new_from_string ((const gchar *) gtk_selection_data_get_data (selection_data));
+          view->drop_data_ready = TRUE;
+        }
+    }
+
+  if (view->drop_occurred)
+    {
+      view->drop_occurred = FALSE;
+      if (info == TARGET_TEXT_URI_LIST)
+        succeed = thunar_miller_columns_view_receive_text_uri_list (widget, context, x, y, timestamp, view);
+
+      gtk_drag_finish (context, succeed, FALSE, timestamp);
+      thunar_miller_columns_view_drag_leave (widget, context, timestamp, view);
+    }
+}
+
+static void
+thunar_miller_columns_view_drag_leave (GtkWidget               *widget,
+                                       GdkDragContext          *context,
+                                       guint                    timestamp,
+                                       ThunarMillerColumnsView *view)
+{
+  ThunarMillerColumn *column;
+
+  column = thunar_miller_columns_view_get_column_for_drag_widget (widget);
+  if (column != NULL)
+    thunar_miller_column_set_drop_file (column, NULL);
+  thunar_miller_columns_view_set_drop_highlight_column (view, NULL);
+
+  if (view->drop_data_ready)
+    {
+      thunar_g_list_free_full (view->drop_file_list);
+      view->drop_file_list = NULL;
+      view->drop_data_ready = FALSE;
+    }
+
+  view->drop_occurred = FALSE;
+}
+
+static void
+thunar_miller_columns_view_update_file_drag_mode_for_column (ThunarMillerColumnsView *view,
+                                                             ThunarMillerColumn      *column)
+{
+  ThunarFileDragMode drag_mode;
+  GtkWidget         *tree_view;
+
+  tree_view = thunar_miller_column_get_tree_view (column);
+  if (tree_view == NULL)
+    return;
+
+  g_object_get (G_OBJECT (view->preferences), "misc-file-drag-mode", &drag_mode, NULL);
+  if (drag_mode == THUNAR_FILE_DRAG_MODE_MENU_ALWAYS)
+    gtk_drag_source_set (tree_view, GDK_BUTTON1_MASK, drag_targets, G_N_ELEMENTS (drag_targets),
+                         GDK_ACTION_ASK | GDK_ACTION_COPY | GDK_ACTION_MOVE | GDK_ACTION_LINK);
+  else if (drag_mode == THUNAR_FILE_DRAG_MODE_MENU_CONDITIONAL)
+    gtk_drag_source_set (tree_view, GDK_BUTTON1_MASK, drag_targets, G_N_ELEMENTS (drag_targets),
+                         GDK_ACTION_COPY | GDK_ACTION_MOVE | GDK_ACTION_LINK);
+  else if (drag_mode == THUNAR_FILE_DRAG_MODE_DISABLED)
+    gtk_drag_source_unset (tree_view);
+  else
+    g_warning ("Unsupported value received for thunar property misc-file-drag-mode");
+}
+
+static void
+thunar_miller_columns_view_update_file_drag_mode (ThunarMillerColumnsView *view)
+{
+  GList *lp;
+
+  for (lp = view->columns; lp != NULL; lp = lp->next)
+    thunar_miller_columns_view_update_file_drag_mode_for_column (view, THUNAR_MILLER_COLUMN (lp->data));
 }
 
 static void
@@ -455,8 +817,9 @@ thunar_miller_columns_view_update_columns_incremental (ThunarMillerColumnsView *
   else
     {
       thunar_miller_columns_view_append_column (view, directory);
-      thunar_miller_columns_view_set_active_column (view, source_column_index + 1, grab_focus);
+      thunar_miller_columns_view_set_active_column (view, source_column_index, grab_focus);
     }
+  thunar_miller_columns_view_update_opened_files (view);
   view->rebuilding = FALSE;
 
   thunar_miller_columns_view_scroll_to_active_column (view);
@@ -594,7 +957,6 @@ static void
 thunar_miller_columns_view_column_selection_changed (ThunarMillerColumn      *column,
                                                      ThunarMillerColumnsView *view)
 {
-  ThunarFile *column_directory;
   ThunarFile *next_directory = NULL;
   ThunarFile *selected_file;
   GtkWidget  *next_column;
@@ -610,7 +972,6 @@ thunar_miller_columns_view_column_selection_changed (ThunarMillerColumn      *co
   thunar_miller_columns_view_set_active_column (view, column_index, FALSE);
 
   selected_file = thunar_miller_column_get_selected_file (column);
-  column_directory = thunar_miller_column_get_directory (column);
 
   if (selected_file != NULL && thunar_file_is_directory (selected_file))
     {
@@ -620,11 +981,6 @@ thunar_miller_columns_view_column_selection_changed (ThunarMillerColumn      *co
 
       if (selected_file != view->current_directory && selected_file != next_directory)
         thunar_miller_columns_view_queue_directory_change (view, selected_file, column_index, TRUE);
-    }
-  else if (selected_file == NULL || column_index != (gint) g_list_length (view->columns) - 1)
-    {
-      if (column_directory != NULL && column_directory != view->current_directory)
-        thunar_miller_columns_view_queue_directory_change (view, column_directory, column_index, TRUE);
     }
 
   if (selected_file != NULL)
@@ -638,6 +994,8 @@ static void
 thunar_miller_columns_view_connect_column (ThunarMillerColumnsView *view,
                                            GtkWidget               *column_widget)
 {
+  GtkWidget *tree_view;
+
   g_signal_connect (column_widget, "file-activated",
                     G_CALLBACK (thunar_miller_columns_view_column_file_activated), view);
   g_signal_connect (column_widget, "selection-changed",
@@ -652,6 +1010,30 @@ thunar_miller_columns_view_connect_column (ThunarMillerColumnsView *view,
                     G_CALLBACK (thunar_miller_columns_view_column_focus_in), view);
   g_signal_connect (column_widget, "notify::loading",
                     G_CALLBACK (thunar_miller_columns_view_column_notify_loading), view);
+
+  tree_view = thunar_miller_column_get_tree_view (THUNAR_MILLER_COLUMN (column_widget));
+  g_object_set_data (G_OBJECT (tree_view), "thunar-miller-column", column_widget);
+
+  gtk_drag_dest_set (tree_view, 0, drop_targets, G_N_ELEMENTS (drop_targets),
+                     GDK_ACTION_ASK | GDK_ACTION_COPY | GDK_ACTION_LINK | GDK_ACTION_MOVE);
+  g_signal_connect (G_OBJECT (tree_view), "drag-drop",
+                    G_CALLBACK (thunar_miller_columns_view_drag_drop), view);
+  g_signal_connect (G_OBJECT (tree_view), "drag-data-received",
+                    G_CALLBACK (thunar_miller_columns_view_drag_data_received), view);
+  g_signal_connect (G_OBJECT (tree_view), "drag-leave",
+                    G_CALLBACK (thunar_miller_columns_view_drag_leave), view);
+  g_signal_connect (G_OBJECT (tree_view), "drag-motion",
+                    G_CALLBACK (thunar_miller_columns_view_drag_motion), view);
+
+  thunar_miller_columns_view_update_file_drag_mode_for_column (view, THUNAR_MILLER_COLUMN (column_widget));
+  g_signal_connect (G_OBJECT (tree_view), "drag-begin",
+                    G_CALLBACK (thunar_miller_columns_view_drag_begin), view);
+  g_signal_connect (G_OBJECT (tree_view), "drag-data-get",
+                    G_CALLBACK (thunar_miller_columns_view_drag_data_get), view);
+  g_signal_connect (G_OBJECT (tree_view), "drag-data-delete",
+                    G_CALLBACK (thunar_miller_columns_view_drag_data_delete), view);
+  g_signal_connect (G_OBJECT (tree_view), "drag-end",
+                    G_CALLBACK (thunar_miller_columns_view_drag_end), view);
 }
 
 static void
@@ -670,6 +1052,7 @@ thunar_miller_columns_view_update_columns (ThunarMillerColumnsView *view,
     }
 
   thunar_miller_columns_view_append_column (view, view->current_directory);
+  thunar_miller_columns_view_update_opened_files (view);
 
   thunar_miller_columns_view_set_active_column (view, g_list_length (view->columns) - 1, grab_focus);
   view->rebuilding = FALSE;
@@ -684,12 +1067,17 @@ thunar_miller_columns_view_dispose (GObject *object)
 {
   ThunarMillerColumnsView *view = THUNAR_MILLER_COLUMNS_VIEW (object);
 
+  thunar_miller_columns_view_set_drop_highlight_column (view, NULL);
   thunar_miller_columns_view_clear_columns (view);
   thunar_miller_columns_view_cancel_pending_directory_change (view);
 
   if (view->history != NULL)
     g_signal_handlers_disconnect_by_func (view->history,
                                           thunar_navigator_change_directory,
+                                          view);
+  if (view->preferences != NULL)
+    g_signal_handlers_disconnect_by_func (view->preferences,
+                                          thunar_miller_columns_view_update_file_drag_mode,
                                           view);
 
   (*G_OBJECT_CLASS (thunar_miller_columns_view_parent_class)->dispose) (object);
@@ -703,6 +1091,8 @@ thunar_miller_columns_view_finalize (GObject *object)
   if (view->current_directory != NULL)
     g_object_unref (view->current_directory);
   g_clear_object (&view->pending_directory);
+  thunar_g_list_free_full (view->drag_g_file_list);
+  thunar_g_list_free_full (view->drop_file_list);
   if (view->accel_group != NULL)
     g_object_unref (view->accel_group);
   if (view->preferences != NULL)
@@ -1211,6 +1601,8 @@ thunar_miller_columns_view_init (ThunarMillerColumnsView *view)
   view->history = g_object_new (THUNAR_TYPE_HISTORY, NULL);
   g_signal_connect_swapped (view->history, "change-directory",
                             G_CALLBACK (thunar_navigator_change_directory), view);
+  g_signal_connect_swapped (view->preferences, "notify::misc-file-drag-mode",
+                            G_CALLBACK (thunar_miller_columns_view_update_file_drag_mode), view);
 
   gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (view),
                                   GTK_POLICY_AUTOMATIC,

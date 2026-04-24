@@ -13,6 +13,7 @@
 #include "thunar/thunar-gobject-extensions.h"
 #include "thunar/thunar-icon-renderer.h"
 #include "thunar/thunar-private.h"
+#include "thunar/thunar-text-renderer.h"
 
 #include <gdk/gdkkeysyms.h>
 
@@ -43,6 +44,11 @@ static void thunar_miller_column_selection_changed (GtkTreeSelection   *selectio
 static void thunar_miller_column_model_notify_loading (ThunarTreeViewModel *model,
                                                        GParamSpec          *pspec,
                                                        ThunarMillerColumn  *column);
+static void thunar_miller_column_cell_data_func (GtkTreeViewColumn *tree_column,
+                                                 GtkCellRenderer   *renderer,
+                                                 GtkTreeModel      *model,
+                                                 GtkTreeIter       *iter,
+                                                 gpointer           user_data);
 
 struct _ThunarMillerColumnClass
 {
@@ -54,6 +60,7 @@ struct _ThunarMillerColumn
   GtkScrolledWindow __parent__;
 
   ThunarFile          *directory;
+  ThunarFile          *opened_file;
   ThunarTreeViewModel *model;
   GtkWidget           *tree_view;
   GtkCellRenderer     *icon_renderer;
@@ -64,6 +71,89 @@ struct _ThunarMillerColumn
 };
 
 G_DEFINE_TYPE (ThunarMillerColumn, thunar_miller_column, GTK_TYPE_SCROLLED_WINDOW)
+
+static void
+thunar_miller_column_get_opened_background (ThunarMillerColumn *column,
+                                            GdkRGBA            *background)
+{
+  GtkStyleContext *context;
+  GdkRGBA          base;
+  GdkRGBA          foreground;
+
+  context = gtk_widget_get_style_context (column->tree_view);
+
+  if (!gtk_style_context_lookup_color (context, "theme_base_color", &base)
+      && !gtk_style_context_lookup_color (context, "theme_bg_color", &base))
+    {
+      base.red = 1.0;
+      base.green = 1.0;
+      base.blue = 1.0;
+      base.alpha = 1.0;
+    }
+
+  if (!gtk_style_context_lookup_color (context, "theme_fg_color", &foreground)
+      && !gtk_style_context_lookup_color (context, "theme_text_color", &foreground))
+    {
+      foreground.red = 0.0;
+      foreground.green = 0.0;
+      foreground.blue = 0.0;
+      foreground.alpha = 1.0;
+    }
+
+  background->red = base.red * 0.84 + foreground.red * 0.16;
+  background->green = base.green * 0.84 + foreground.green * 0.16;
+  background->blue = base.blue * 0.84 + foreground.blue * 0.16;
+  background->alpha = 1.0;
+}
+
+static void
+thunar_miller_column_cell_data_func (GtkTreeViewColumn *tree_column,
+                                     GtkCellRenderer   *renderer,
+                                     GtkTreeModel      *model,
+                                     GtkTreeIter       *iter,
+                                     gpointer           user_data)
+{
+  ThunarMillerColumn *column = THUNAR_MILLER_COLUMN (user_data);
+  GdkRGBA             background;
+  GtkTreePath        *path;
+  GtkTreeSelection   *selection;
+  ThunarFile         *file;
+  gchar              *background_string = NULL;
+  gboolean            opened;
+  gboolean            selected;
+
+  file = thunar_tree_view_model_get_file (THUNAR_TREE_VIEW_MODEL (model), iter);
+  path = gtk_tree_model_get_path (model, iter);
+  selection = gtk_tree_view_get_selection (GTK_TREE_VIEW (column->tree_view));
+  selected = path != NULL && gtk_tree_selection_path_is_selected (selection, path);
+  opened = file != NULL && file == column->opened_file && !selected;
+
+  if (opened)
+    {
+      thunar_miller_column_get_opened_background (column, &background);
+      background_string = gdk_rgba_to_string (&background);
+    }
+
+  if (THUNAR_IS_TEXT_RENDERER (renderer))
+    g_object_set (renderer,
+                  "highlight-color", background_string,
+                  "highlighting-enabled", opened,
+                  "foreground-set", FALSE,
+                  "weight", PANGO_WEIGHT_NORMAL,
+                  "weight-set", FALSE,
+                  NULL);
+  else if (THUNAR_IS_ICON_RENDERER (renderer))
+    g_object_set (renderer,
+                  "highlight-color", background_string,
+                  "highlighting-enabled", opened,
+                  NULL);
+
+  if (file != NULL)
+    g_object_unref (file);
+  if (path != NULL)
+    gtk_tree_path_free (path);
+  g_free (background_string);
+}
 
 static gboolean
 thunar_miller_column_set_cursor_first_or_last (ThunarMillerColumn *column,
@@ -141,6 +231,8 @@ thunar_miller_column_finalize (GObject *object)
 
   if (column->directory != NULL)
     g_object_unref (column->directory);
+  if (column->opened_file != NULL)
+    g_object_unref (column->opened_file);
   if (column->model != NULL)
     g_object_unref (column->model);
 
@@ -468,13 +560,23 @@ thunar_miller_column_init (ThunarMillerColumn *column)
   gtk_tree_view_column_set_attributes (tree_column, column->icon_renderer,
                                        "file", THUNAR_COLUMN_FILE,
                                        NULL);
+  gtk_tree_view_column_set_cell_data_func (tree_column,
+                                           column->icon_renderer,
+                                           thunar_miller_column_cell_data_func,
+                                           column,
+                                           NULL);
 
-  column->name_renderer = gtk_cell_renderer_text_new ();
+  column->name_renderer = thunar_text_renderer_new ();
   g_object_set (column->name_renderer, "ellipsize", PANGO_ELLIPSIZE_END, NULL);
   gtk_tree_view_column_pack_start (tree_column, column->name_renderer, TRUE);
   gtk_tree_view_column_set_attributes (tree_column, column->name_renderer,
                                        "text", THUNAR_COLUMN_NAME,
                                        NULL);
+  gtk_tree_view_column_set_cell_data_func (tree_column,
+                                           column->name_renderer,
+                                           thunar_miller_column_cell_data_func,
+                                           column,
+                                           NULL);
 
   gtk_tree_view_append_column (GTK_TREE_VIEW (column->tree_view), tree_column);
 
@@ -520,6 +622,11 @@ thunar_miller_column_set_directory (ThunarMillerColumn *column,
                                             column);
       g_object_unref (column->model);
       column->model = NULL;
+    }
+  if (column->opened_file != NULL)
+    {
+      g_object_unref (column->opened_file);
+      column->opened_file = NULL;
     }
 
   column->directory = directory != NULL ? g_object_ref (directory) : NULL;
@@ -571,6 +678,78 @@ thunar_miller_column_get_selected_file (ThunarMillerColumn *column)
   g_list_free_full (rows, (GDestroyNotify) gtk_tree_path_free);
 
   return file;
+}
+
+void
+thunar_miller_column_set_opened_file (ThunarMillerColumn *column,
+                                      ThunarFile         *file)
+{
+  _thunar_return_if_fail (THUNAR_IS_MILLER_COLUMN (column));
+  _thunar_return_if_fail (file == NULL || THUNAR_IS_FILE (file));
+
+  if (column->opened_file == file)
+    return;
+
+  if (column->opened_file != NULL)
+    g_object_unref (column->opened_file);
+  column->opened_file = file != NULL ? g_object_ref (file) : NULL;
+
+  gtk_widget_queue_draw (column->tree_view);
+}
+
+GtkWidget *
+thunar_miller_column_get_tree_view (ThunarMillerColumn *column)
+{
+  _thunar_return_val_if_fail (THUNAR_IS_MILLER_COLUMN (column), NULL);
+  return column->tree_view;
+}
+
+ThunarFile *
+thunar_miller_column_get_drop_file (ThunarMillerColumn *column,
+                                    gint                x,
+                                    gint                y,
+                                    GtkTreePath       **path_return)
+{
+  GtkTreePath *path = NULL;
+  GtkTreeIter  iter;
+  ThunarFile  *file = NULL;
+
+  _thunar_return_val_if_fail (THUNAR_IS_MILLER_COLUMN (column), NULL);
+
+  if (gtk_tree_view_get_path_at_pos (GTK_TREE_VIEW (column->tree_view),
+                                     x, y, &path, NULL, NULL, NULL))
+    {
+      if (column->model != NULL && gtk_tree_model_get_iter (GTK_TREE_MODEL (column->model), &iter, path))
+        file = thunar_tree_view_model_get_file (column->model, &iter);
+
+      if (file != NULL && !thunar_file_is_directory (file) && !thunar_file_can_execute (file, NULL))
+        {
+          g_object_unref (file);
+          file = NULL;
+          gtk_tree_path_free (path);
+          path = NULL;
+        }
+    }
+
+  if (file == NULL && column->directory != NULL)
+    file = g_object_ref (column->directory);
+
+  if (path_return != NULL)
+    *path_return = path;
+  else if (path != NULL)
+    gtk_tree_path_free (path);
+
+  return file;
+}
+
+void
+thunar_miller_column_set_drop_file (ThunarMillerColumn *column,
+                                    ThunarFile         *file)
+{
+  _thunar_return_if_fail (THUNAR_IS_MILLER_COLUMN (column));
+  _thunar_return_if_fail (file == NULL || THUNAR_IS_FILE (file));
+
+  g_object_set (G_OBJECT (column->icon_renderer), "drop-file", file, NULL);
 }
 
 void

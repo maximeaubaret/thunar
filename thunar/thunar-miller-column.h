@@ -47,6 +47,19 @@ thunar_miller_column_get_selected_file (ThunarMillerColumn *column);
 void
 thunar_miller_column_set_selected_file (ThunarMillerColumn *column,
                                         ThunarFile         *file);
+void
+thunar_miller_column_set_opened_file (ThunarMillerColumn *column,
+                                      ThunarFile         *file);
+GtkWidget *
+thunar_miller_column_get_tree_view (ThunarMillerColumn *column);
+ThunarFile *
+thunar_miller_column_get_drop_file (ThunarMillerColumn *column,
+                                    gint                x,
+                                    gint                y,
+                                    GtkTreePath       **path_return);
+void
+thunar_miller_column_set_drop_file (ThunarMillerColumn *column,
+                                    ThunarFile         *file);
 
 GList *
 thunar_miller_column_get_selected_files (ThunarMillerColumn *column);
