@@ -22,6 +22,7 @@
 
 #include "thunar/thunar-component.h"
 #include "thunar/thunar-enum-types.h"
+#include "thunar/thunar-history.h"
 #include "thunar/thunar-navigator.h"
 
 G_BEGIN_DECLS;
@@ -65,6 +66,12 @@ struct _ThunarViewIface
   GList *(*get_selected_files) (ThunarView *view);
   void (*set_selected_files) (ThunarView *view,
                               GList      *path_list);
+  void (*set_history) (ThunarView   *view,
+                       ThunarHistory *history);
+  ThunarHistory *(*get_history) (ThunarView *view);
+  ThunarHistory *(*copy_history) (ThunarView *view);
+  void (*update_statusbar_text) (ThunarView *view);
+  void (*queue_redraw) (ThunarView *view);
 };
 
 GType
@@ -108,6 +115,17 @@ thunar_view_get_selected_files (ThunarView *view);
 void
 thunar_view_set_selected_files (ThunarView *view,
                                 GList      *path_list);
+void
+thunar_view_set_history (ThunarView    *view,
+                         ThunarHistory *history);
+ThunarHistory *
+thunar_view_get_history (ThunarView *view);
+ThunarHistory *
+thunar_view_copy_history (ThunarView *view);
+void
+thunar_view_update_statusbar_text (ThunarView *view);
+void
+thunar_view_queue_redraw (ThunarView *view);
 
 G_END_DECLS;
 

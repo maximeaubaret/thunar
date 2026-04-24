@@ -46,6 +46,7 @@
 #include "thunar/thunar-location-entry.h"
 #include "thunar/thunar-marshal.h"
 #include "thunar/thunar-menu.h"
+#include "thunar/thunar-miller-columns-view.h"
 #include "thunar/thunar-pango-extensions.h"
 #include "thunar/thunar-preferences-dialog.h"
 #include "thunar/thunar-preferences.h"
@@ -289,6 +290,8 @@ static gboolean
 thunar_window_action_icon_view (ThunarWindow *window);
 static gboolean
 thunar_window_action_compact_view (ThunarWindow *window);
+static gboolean
+thunar_window_action_miller_columns_view (ThunarWindow *window);
 static gboolean
 thunar_window_action_show_toolbar_editor (ThunarWindow *window);
 static gboolean
@@ -627,6 +630,7 @@ struct _ThunarWindow
   GtkWidget *location_toolbar_item_icon_view;
   GtkWidget *location_toolbar_item_detailed_view;
   GtkWidget *location_toolbar_item_compact_view;
+  GtkWidget *location_toolbar_item_miller_view;
   GtkWidget *location_toolbar_item_view_switcher;
   GtkWidget *location_toolbar_item_search;
   GtkWidget *location_toolbar_item_show_hidden;
@@ -711,6 +715,7 @@ static XfceGtkActionEntry thunar_window_action_entries[] =
     { THUNAR_WINDOW_ACTION_VIEW_AS_ICONS,                  "<Actions>/ThunarWindow/view-as-icons",                   "<Primary>1",           XFCE_GTK_RADIO_MENU_ITEM, N_ ("_Icon View"),             N_ ("Display folder content in an icon view"),                                       "view-grid",               G_CALLBACK (thunar_window_action_icon_view),          },
     { THUNAR_WINDOW_ACTION_VIEW_AS_DETAILED_LIST,          "<Actions>/ThunarWindow/view-as-detailed-list",           "<Primary>2",           XFCE_GTK_RADIO_MENU_ITEM, N_ ("_List View"),             N_ ("Display folder content in a detailed list view"),                               "view-list",               G_CALLBACK (thunar_window_action_detailed_view),      },
     { THUNAR_WINDOW_ACTION_VIEW_AS_COMPACT_LIST,           "<Actions>/ThunarWindow/view-as-compact-list",            "<Primary>3",           XFCE_GTK_RADIO_MENU_ITEM, N_ ("_Compact View"),          N_ ("Display folder content in a compact list view"),                                "view-compact",            G_CALLBACK (thunar_window_action_compact_view),       },
+    { THUNAR_WINDOW_ACTION_VIEW_AS_MILLER_COLUMNS,         "<Actions>/ThunarWindow/view-as-miller-columns",          "<Primary>4",           XFCE_GTK_RADIO_MENU_ITEM, N_ ("_Miller Columns"),        N_ ("Display folder content in Miller columns"),                                     "view-list",               G_CALLBACK (thunar_window_action_miller_columns_view),},
 
     { THUNAR_WINDOW_ACTION_GO_MENU,                        "<Actions>/ThunarWindow/go-menu",                         "",                     XFCE_GTK_MENU_ITEM,       N_ ("_Go"),                    NULL,                                                                                NULL,                      NULL                                                  },
     { THUNAR_WINDOW_ACTION_OPEN_FILE_SYSTEM,               "<Actions>/ThunarWindow/open-file-system",                "",                     XFCE_GTK_IMAGE_MENU_ITEM, N_ ("F_ile System"),           N_ ("Browse the file system"),                                                       "drive-harddisk",          G_CALLBACK (thunar_window_action_open_file_system),   },
@@ -1263,6 +1268,7 @@ thunar_window_init (ThunarWindow *window)
   g_type_ensure (THUNAR_TYPE_ICON_VIEW);
   g_type_ensure (THUNAR_TYPE_DETAILS_VIEW);
   g_type_ensure (THUNAR_TYPE_COMPACT_VIEW);
+  g_type_ensure (THUNAR_TYPE_MILLER_COLUMNS_VIEW);
 
   /* update window icon whenever preferences change */
   g_signal_connect_swapped (G_OBJECT (window->preferences), "notify::misc-change-window-icon", G_CALLBACK (thunar_window_update_window_icon), window);
@@ -1308,7 +1314,7 @@ thunar_window_init (ThunarWindow *window)
 
   thunar_statusbar_setup_event (THUNAR_STATUSBAR (window->statusbar), event_box);
   if (G_LIKELY (window->view != NULL))
-    thunar_window_create_view_binding (window, THUNAR_STANDARD_VIEW (window->view), "statusbar-text", window->statusbar, "text", G_BINDING_SYNC_CREATE);
+    thunar_window_create_view_binding (window, window->view, "statusbar-text", window->statusbar, "text", G_BINDING_SYNC_CREATE);
 
   /* load the bookmarks file and monitor */
   window->bookmarks = NULL;
@@ -1575,7 +1581,7 @@ thunar_window_update_edit_menu (ThunarWindow *window,
   thunar_menu_add_sections (THUNAR_MENU (menu), THUNAR_MENU_SECTION_CUT
                                                 | THUNAR_MENU_SECTION_COPY_PASTE
                                                 | THUNAR_MENU_SECTION_TRASH_DELETE);
-  if (window->view != NULL)
+  if (THUNAR_IS_STANDARD_VIEW (window->view))
     {
       thunar_standard_view_append_menu_item (THUNAR_STANDARD_VIEW (window->view),
                                              GTK_MENU (menu), THUNAR_STANDARD_VIEW_ACTION_SELECT_ALL_FILES);
@@ -1688,7 +1694,7 @@ thunar_window_update_view_menu (ThunarWindow *window,
                                                        highlight_enabled, GTK_MENU_SHELL (menu));
     }
   xfce_gtk_menu_append_separator (GTK_MENU_SHELL (menu));
-  if (window->view != NULL)
+  if (THUNAR_IS_STANDARD_VIEW (window->view))
     thunar_standard_view_append_menu_items (THUNAR_STANDARD_VIEW (window->view), GTK_MENU (menu), window->accel_group);
   xfce_gtk_menu_append_separator (GTK_MENU_SHELL (menu));
   thunar_window_append_menu_item (window, GTK_MENU_SHELL (menu), THUNAR_WINDOW_ACTION_ZOOM_IN);
@@ -1703,6 +1709,10 @@ thunar_window_update_view_menu (ThunarWindow *window,
                                                    G_OBJECT (window), window->view_type == THUNAR_TYPE_DETAILS_VIEW, GTK_MENU_SHELL (menu));
   item = xfce_gtk_toggle_menu_item_new_from_action_entry (get_action_entry (THUNAR_WINDOW_ACTION_VIEW_AS_COMPACT_LIST),
                                                           G_OBJECT (window), window->view_type == THUNAR_TYPE_COMPACT_VIEW, GTK_MENU_SHELL (menu));
+  if (window->search_mode == TRUE)
+    gtk_widget_set_sensitive (item, FALSE);
+  item = xfce_gtk_toggle_menu_item_new_from_action_entry (get_action_entry (THUNAR_WINDOW_ACTION_VIEW_AS_MILLER_COLUMNS),
+                                                          G_OBJECT (window), window->view_type == THUNAR_TYPE_MILLER_COLUMNS_VIEW, GTK_MENU_SHELL (menu));
   if (window->search_mode == TRUE)
     gtk_widget_set_sensitive (item, FALSE);
 
@@ -1725,7 +1735,7 @@ thunar_window_update_go_menu (ThunarWindow *window,
   _thunar_return_if_fail (THUNAR_IS_WINDOW (window));
 
   if (window->view != NULL)
-    history = thunar_standard_view_get_history (THUNAR_STANDARD_VIEW (window->view));
+    history = thunar_view_get_history (THUNAR_VIEW (window->view));
 
   thunar_gtk_menu_clean (GTK_MENU (menu));
   item = xfce_gtk_menu_item_new_from_action_entry (get_action_entry (THUNAR_WINDOW_ACTION_OPEN_PARENT), G_OBJECT (window), GTK_MENU_SHELL (menu));
@@ -2352,7 +2362,7 @@ thunar_window_clipboard_manager_changed (GtkWidget *widget)
    * in order to do not redraw the view if just some text is copied.
    */
   if (thunar_clipboard_manager_get_can_paste (window->clipboard) && G_LIKELY (window->view != NULL))
-    thunar_standard_view_queue_redraw (THUNAR_STANDARD_VIEW (window->view));
+    thunar_view_queue_redraw (THUNAR_VIEW (window->view));
 }
 
 
@@ -2484,8 +2494,9 @@ thunar_window_switch_current_view (ThunarWindow *window,
       /* disconnect from previous history */
       if (window->signal_handler_id_history_changed != 0)
         {
-          history = thunar_standard_view_get_history (THUNAR_STANDARD_VIEW (window->view));
-          g_signal_handler_disconnect (history, window->signal_handler_id_history_changed);
+          history = thunar_view_get_history (THUNAR_VIEW (window->view));
+          if (history != NULL)
+            g_signal_handler_disconnect (history, window->signal_handler_id_history_changed);
           window->signal_handler_id_history_changed = 0;
         }
 
@@ -2502,7 +2513,9 @@ thunar_window_switch_current_view (ThunarWindow *window,
   g_slist_free_full (view_bindings, g_object_unref);
 
   /* exit search mode (if the view has no ongoing search operation) */
-  search_query = thunar_standard_view_get_search_query (THUNAR_STANDARD_VIEW (new_view));
+  search_query = THUNAR_IS_STANDARD_VIEW (new_view)
+                 ? thunar_standard_view_get_search_query (THUNAR_STANDARD_VIEW (new_view))
+                 : NULL;
   if (search_query == NULL && window->search_query != NULL)
     thunar_window_cancel_search (window);
 
@@ -2517,6 +2530,7 @@ thunar_window_switch_current_view (ThunarWindow *window,
   thunar_window_create_view_binding (window, new_view, "searching", window, "searching", G_BINDING_SYNC_CREATE);
   thunar_window_create_view_binding (window, new_view, "search-mode-active", window->location_toolbar_item_icon_view, "sensitive", G_BINDING_SYNC_CREATE | G_BINDING_INVERT_BOOLEAN);
   thunar_window_create_view_binding (window, new_view, "search-mode-active", window->location_toolbar_item_compact_view, "sensitive", G_BINDING_SYNC_CREATE | G_BINDING_INVERT_BOOLEAN);
+  thunar_window_create_view_binding (window, new_view, "search-mode-active", window->location_toolbar_item_miller_view, "sensitive", G_BINDING_SYNC_CREATE | G_BINDING_INVERT_BOOLEAN);
   thunar_window_create_view_binding (window, new_view, "search-mode-active", window->location_toolbar_item_view_switcher, "sensitive", G_BINDING_SYNC_CREATE | G_BINDING_INVERT_BOOLEAN);
   thunar_window_create_view_binding (window, new_view, "selected-files", window->action_mgr, "selected-files", G_BINDING_SYNC_CREATE);
   thunar_window_create_view_binding (window, new_view, "zoom-level", window, "zoom-level", G_BINDING_SYNC_CREATE | G_BINDING_BIDIRECTIONAL);
@@ -2538,14 +2552,16 @@ thunar_window_switch_current_view (ThunarWindow *window,
   /* connect to the statusbar (if any) */
   if (G_LIKELY (window->statusbar != NULL))
     {
-      thunar_window_create_view_binding (window, THUNAR_STANDARD_VIEW (new_view), "statusbar-text",
+      thunar_window_create_view_binding (window, new_view, "statusbar-text",
                                          window->statusbar, "text",
                                          G_BINDING_SYNC_CREATE);
     }
 
 #ifdef HAVE_VTE
   /* connect to the terminal (if any) */
-  terminal = GTK_WIDGET (thunar_standard_view_get_terminal_widget (THUNAR_STANDARD_VIEW (new_view)));
+  terminal = THUNAR_IS_STANDARD_VIEW (new_view)
+             ? GTK_WIDGET (thunar_standard_view_get_terminal_widget (THUNAR_STANDARD_VIEW (new_view)))
+             : NULL;
   if (terminal != NULL)
     {
       thunar_window_create_view_binding (window, G_OBJECT (new_view), "current-directory",
@@ -2562,6 +2578,7 @@ thunar_window_switch_current_view (ThunarWindow *window,
   g_signal_handlers_block_by_func (window->location_toolbar_item_detailed_view, get_action_entry (THUNAR_WINDOW_ACTION_VIEW_AS_DETAILED_LIST)->callback, window);
   g_signal_handlers_block_by_func (window->location_toolbar_item_compact_view, get_action_entry (THUNAR_WINDOW_ACTION_VIEW_AS_COMPACT_LIST)->callback, window);
   g_signal_handlers_block_by_func (window->location_toolbar_item_icon_view, get_action_entry (THUNAR_WINDOW_ACTION_VIEW_AS_ICONS)->callback, window);
+  g_signal_handlers_block_by_func (window->location_toolbar_item_miller_view, get_action_entry (THUNAR_WINDOW_ACTION_VIEW_AS_MILLER_COLUMNS)->callback, window);
 
   if (window->view_type == THUNAR_TYPE_DETAILS_VIEW)
     gtk_toggle_tool_button_set_active (GTK_TOGGLE_TOOL_BUTTON (window->location_toolbar_item_detailed_view), TRUE);
@@ -2569,10 +2586,13 @@ thunar_window_switch_current_view (ThunarWindow *window,
     gtk_toggle_tool_button_set_active (GTK_TOGGLE_TOOL_BUTTON (window->location_toolbar_item_compact_view), TRUE);
   else if (window->view_type == THUNAR_TYPE_ICON_VIEW)
     gtk_toggle_tool_button_set_active (GTK_TOGGLE_TOOL_BUTTON (window->location_toolbar_item_icon_view), TRUE);
+  else if (window->view_type == THUNAR_TYPE_MILLER_COLUMNS_VIEW)
+    gtk_toggle_tool_button_set_active (GTK_TOGGLE_TOOL_BUTTON (window->location_toolbar_item_miller_view), TRUE);
 
   g_signal_handlers_unblock_by_func (window->location_toolbar_item_detailed_view, get_action_entry (THUNAR_WINDOW_ACTION_VIEW_AS_DETAILED_LIST)->callback, window);
   g_signal_handlers_unblock_by_func (window->location_toolbar_item_compact_view, get_action_entry (THUNAR_WINDOW_ACTION_VIEW_AS_COMPACT_LIST)->callback, window);
   g_signal_handlers_unblock_by_func (window->location_toolbar_item_icon_view, get_action_entry (THUNAR_WINDOW_ACTION_VIEW_AS_ICONS)->callback, window);
+  g_signal_handlers_unblock_by_func (window->location_toolbar_item_miller_view, get_action_entry (THUNAR_WINDOW_ACTION_VIEW_AS_MILLER_COLUMNS)->callback, window);
 
   thunar_window_view_switcher_update (window);
 
@@ -2584,7 +2604,7 @@ thunar_window_switch_current_view (ThunarWindow *window,
                             G_CALLBACK (thunar_window_selection_changed), window);
 
   /* connect to the new history */
-  history = thunar_standard_view_get_history (THUNAR_STANDARD_VIEW (window->view));
+  history = thunar_view_get_history (THUNAR_VIEW (window->view));
   if (history != NULL)
     {
       window->signal_handler_id_history_changed = g_signal_connect_swapped (G_OBJECT (history), "history-changed", G_CALLBACK (thunar_window_history_changed), window);
@@ -2693,7 +2713,7 @@ thunar_window_history_changed (ThunarWindow *window)
   if (window->view == NULL)
     return;
 
-  history = thunar_standard_view_get_history (THUNAR_STANDARD_VIEW (window->view));
+  history = thunar_view_get_history (THUNAR_VIEW (window->view));
   if (history == NULL)
     return;
 
@@ -3000,8 +3020,15 @@ thunar_window_create_view (ThunarWindow *window,
     }
   else
     {
-      g_object_get (window->view, "sort-column", &sort_column, "sort-order", &sort_order, NULL);
-      history = thunar_standard_view_copy_history (THUNAR_STANDARD_VIEW (window->view));
+      if (THUNAR_IS_STANDARD_VIEW (window->view))
+        {
+          g_object_get (window->view, "sort-column", &sort_column, "sort-order", &sort_order, NULL);
+        }
+      else
+        {
+          g_object_get (G_OBJECT (window->preferences), "last-sort-column", &sort_column, "last-sort-order", &sort_order, NULL);
+        }
+      history = thunar_view_copy_history (THUNAR_VIEW (window->view));
     }
 
   /* allocate and setup a new view */
@@ -3014,7 +3041,7 @@ thunar_window_create_view (ThunarWindow *window,
 
   /* set the history of the view if a history is provided */
   if (history != NULL)
-    thunar_standard_view_set_history (THUNAR_STANDARD_VIEW (view), history);
+    thunar_view_set_history (THUNAR_VIEW (view), history);
 
   return view;
 }
@@ -3153,16 +3180,19 @@ thunar_window_notebook_insert_page (ThunarWindow *window,
   g_signal_connect (tab_content_paned, "size-allocate",
                     G_CALLBACK (_set_initial_terminal_height), GINT_TO_POINTER (saved_height));
 
-  thunar_standard_view_set_terminal_widget (THUNAR_STANDARD_VIEW (view), terminal);
+  if (THUNAR_IS_STANDARD_VIEW (view))
+    {
+      thunar_standard_view_set_terminal_widget (THUNAR_STANDARD_VIEW (view), terminal);
 
-  /* Create binding between terminal and view */
-  thunar_window_create_view_binding (window, G_OBJECT (view), "current-directory",
-                                     G_OBJECT (terminal), "current-directory",
-                                     G_BINDING_SYNC_CREATE | G_BINDING_DEFAULT);
+      /* Create binding between terminal and view */
+      thunar_window_create_view_binding (window, G_OBJECT (view), "current-directory",
+                                         G_OBJECT (terminal), "current-directory",
+                                         G_BINDING_SYNC_CREATE | G_BINDING_DEFAULT);
+    }
 
   /* Initialize terminal visibility based on preferences */
   g_object_get (window->preferences, "terminal-visible", &terminal_visible, NULL);
-  if (terminal_visible)
+  if (terminal_visible && THUNAR_IS_STANDARD_VIEW (view))
     gtk_widget_show (GTK_WIDGET (terminal));
   else
     gtk_widget_hide (GTK_WIDGET (terminal));
@@ -3346,7 +3376,7 @@ thunar_window_notebook_add_new_tab (ThunarWindow        *window,
 
   /* history is updated only on 'change-directory' signal. */
   /* For inserting a new tab, we need to update it manually */
-  history = thunar_standard_view_get_history (THUNAR_STANDARD_VIEW (view));
+  history = thunar_view_get_history (THUNAR_VIEW (view));
   if (G_LIKELY (history))
     thunar_history_add (history, directory);
 
@@ -3970,10 +4000,10 @@ thunar_window_action_open_new_window (ThunarWindow *window,
     return TRUE;
 
   /* let the view of the new window inherit the history of the origin view */
-  history = thunar_standard_view_copy_history (THUNAR_STANDARD_VIEW (window->view));
+  history = thunar_view_copy_history (THUNAR_VIEW (window->view));
   if (history != NULL)
     {
-      thunar_standard_view_set_history (THUNAR_STANDARD_VIEW (new_window->view), history);
+      thunar_view_set_history (THUNAR_VIEW (new_window->view), history);
       thunar_window_history_changed (new_window);
 
       /* connect the new window to the new history */
@@ -4611,6 +4641,18 @@ thunar_window_action_compact_view (ThunarWindow *window)
 
 
 
+static gboolean
+thunar_window_action_miller_columns_view (ThunarWindow *window)
+{
+  if (window->search_mode == FALSE)
+    thunar_window_action_view_changed (window, THUNAR_TYPE_MILLER_COLUMNS_VIEW);
+
+  /* required in case of shortcut activation, in order to signal that the accel key got handled */
+  return TRUE;
+}
+
+
+
 static void
 thunar_window_replace_view (ThunarWindow *window,
                             GtkWidget    *view_to_replace,
@@ -4619,6 +4661,7 @@ thunar_window_replace_view (ThunarWindow *window,
 {
   ThunarFile *file = NULL;
   ThunarFile *current_directory = NULL;
+  GList      *selected_files = NULL;
   GtkWidget  *new_view;
 
   _thunar_return_if_fail (view_type != G_TYPE_NONE);
@@ -4643,7 +4686,8 @@ thunar_window_replace_view (ThunarWindow *window,
   if (current_directory != NULL)
     g_object_ref (current_directory);
 
-  if (thunar_standard_view_get_search_query (THUNAR_STANDARD_VIEW (view_to_replace)) != NULL)
+  if (THUNAR_IS_STANDARD_VIEW (view_to_replace)
+      && thunar_standard_view_get_search_query (THUNAR_STANDARD_VIEW (view_to_replace)) != NULL)
     thunar_window_cancel_search (window);
 
   _thunar_assert (current_directory != NULL);
@@ -4655,9 +4699,9 @@ thunar_window_replace_view (ThunarWindow *window,
   ThunarTerminalWidget *terminal_to_reuse = thunar_window_get_view_terminal (view_to_replace);
 
   /* Ensure the widget hierarchy is as expected. */
-  if (!GTK_IS_PANED (paned_container) || !THUNAR_IS_TERMINAL_WIDGET (terminal_to_reuse))
+  if (!GTK_IS_PANED (paned_container))
     {
-      g_warning ("Could not replace view in-place: view is not in a recognized paned container with a terminal.");
+      g_warning ("Could not replace view in-place: view is not in a recognized paned container.");
       if (file)
         g_object_unref (file);
       if (current_directory)
@@ -4668,11 +4712,13 @@ thunar_window_replace_view (ThunarWindow *window,
 
 #ifdef HAVE_VTE
   /* Keep terminal alive during the swap. */
-  g_object_ref (terminal_to_reuse);
+  if (terminal_to_reuse != NULL)
+    g_object_ref (terminal_to_reuse);
 #endif
 
   /* Create the new view. */
   new_view = thunar_window_create_view (window, current_directory, view_type);
+  selected_files = thunar_view_get_selected_files (THUNAR_VIEW (view_to_replace));
 
   /* Swap the view widgets inside the paned container. */
   g_object_ref (view_to_replace); /* Keep old view alive for selection transfer. */
@@ -4681,12 +4727,14 @@ thunar_window_replace_view (ThunarWindow *window,
   gtk_widget_show (new_view);
 
   /* Transfer the file selection from the old view to the new one. */
-  if (new_view != NULL)
-    thunar_standard_view_transfer_selection (THUNAR_STANDARD_VIEW (new_view), THUNAR_STANDARD_VIEW (view_to_replace));
+  if (new_view != NULL && selected_files != NULL)
+    thunar_view_set_selected_files (THUNAR_VIEW (new_view), selected_files);
 
 #ifdef HAVE_VTE
-  /* Transfer terminal from old view to new view directly */
-  thunar_standard_view_set_terminal_widget (THUNAR_STANDARD_VIEW (new_view), terminal_to_reuse);
+  if (THUNAR_IS_STANDARD_VIEW (new_view) && terminal_to_reuse != NULL)
+    thunar_standard_view_set_terminal_widget (THUNAR_STANDARD_VIEW (new_view), terminal_to_reuse);
+  else if (terminal_to_reuse != NULL)
+    gtk_widget_hide (GTK_WIDGET (terminal_to_reuse));
 #endif
   /* If the replaced view was the active one, update the main window view pointer. */
   if (view_to_replace == window->view)
@@ -4704,6 +4752,8 @@ thunar_window_replace_view (ThunarWindow *window,
     g_object_unref (G_OBJECT (file));
   if (G_UNLIKELY (current_directory != NULL))
     g_object_unref (G_OBJECT (current_directory));
+  if (selected_files != NULL)
+    thunar_g_list_free_full (selected_files);
 }
 
 
@@ -4764,7 +4814,9 @@ thunar_window_action_back (ThunarWindow *window)
       return TRUE;
     }
 
-  history = thunar_standard_view_get_history (THUNAR_STANDARD_VIEW (window->view));
+  history = thunar_view_get_history (THUNAR_VIEW (window->view));
+  if (history == NULL)
+    return FALSE;
   thunar_history_action_back (history);
 
   /* required in case of shortcut activation, in order to signal that the accel key got handled */
@@ -4786,7 +4838,9 @@ thunar_window_action_forward (ThunarWindow *window)
       return TRUE;
     }
 
-  history = thunar_standard_view_get_history (THUNAR_STANDARD_VIEW (window->view));
+  history = thunar_view_get_history (THUNAR_VIEW (window->view));
+  if (history == NULL)
+    return FALSE;
   thunar_history_action_forward (history);
 
   /* required in case of shortcut activation, in order to signal that the accel key got handled */
@@ -5829,10 +5883,16 @@ thunar_window_set_directory_specific_settings (ThunarWindow *window,
   /* replace each tab with a tab of the correct view type */
   for (lp = tabs; lp != NULL; lp = lp->next)
     {
-      if (!THUNAR_IS_STANDARD_VIEW (lp->data))
+      GtkWidget *view = NULL;
+
+      if (!GTK_IS_PANED (lp->data))
         continue;
 
-      directory = thunar_navigator_get_current_directory (lp->data);
+      view = gtk_paned_get_child1 (GTK_PANED (lp->data));
+      if (!THUNAR_IS_VIEW (view))
+        continue;
+
+      directory = thunar_navigator_get_current_directory (THUNAR_NAVIGATOR (view));
 
       if (!THUNAR_IS_FILE (directory))
         continue;
@@ -5841,7 +5901,7 @@ thunar_window_set_directory_specific_settings (ThunarWindow *window,
       view_type = thunar_window_view_type_for_directory (window, directory);
 
       /* replace the old view with a new one */
-      thunar_window_replace_view (window, lp->data, view_type, TRUE);
+      thunar_window_replace_view (window, view, view_type, TRUE);
     }
 
   g_list_free (tabs);
@@ -5942,6 +6002,15 @@ thunar_window_set_current_directory (ThunarWindow *window,
     }
 
   type = thunar_window_view_type_for_directory (window, window->current_directory);
+
+  /* Preserve Miller mode while navigating within an already active Miller view.
+   * Otherwise directory-specific settings can immediately kick the user back
+   * to another view type on the first folder activation. */
+  if (window->view != NULL
+      && window->view_type == THUNAR_TYPE_MILLER_COLUMNS_VIEW
+      && THUNAR_IS_MILLER_COLUMNS_VIEW (window->view)
+      && !window->search_mode)
+    type = THUNAR_TYPE_MILLER_COLUMNS_VIEW;
 
   if (num_pages == 0) /* create a new view if the window is new */
     {
@@ -6225,7 +6294,9 @@ thunar_window_history_clicked (GtkWidget      *button,
   if (window->search_mode)
     return FALSE;
 
-  history = thunar_standard_view_get_history (THUNAR_STANDARD_VIEW (window->view));
+  history = thunar_view_get_history (THUNAR_VIEW (window->view));
+  if (history == NULL)
+    return FALSE;
   if (event->button == 2)
     {
       /* middle click to open a new tab/window */
@@ -6267,7 +6338,9 @@ thunar_window_history_popup_menu (GtkWidget    *button,
   if (window->search_mode)
     return FALSE;
 
-  history = thunar_standard_view_get_history (THUNAR_STANDARD_VIEW (window->view));
+  history = thunar_view_get_history (THUNAR_VIEW (window->view));
+  if (history == NULL)
+    return FALSE;
   if (button == window->location_toolbar_item_back)
     thunar_history_show_menu (history, THUNAR_HISTORY_MENU_BACK, button);
   else if (button == window->location_toolbar_item_forward)
@@ -6657,7 +6730,8 @@ thunar_window_catfish_dialog_configure (ThunarWindow *window)
 void
 thunar_window_update_statusbar (ThunarWindow *window)
 {
-  thunar_standard_view_update_statusbar_text (THUNAR_STANDARD_VIEW (window->view));
+  if (window->view != NULL)
+    thunar_view_update_statusbar_text (THUNAR_VIEW (window->view));
 }
 
 
@@ -7086,6 +7160,23 @@ thunar_window_view_switcher_update (ThunarWindow *window)
     }
   g_free (icon_name);
 
+  action_entry = *(get_action_entry (THUNAR_WINDOW_ACTION_VIEW_AS_MILLER_COLUMNS));
+  action_entry.menu_item_type = XFCE_GTK_IMAGE_MENU_ITEM;
+  icon_name = thunar_window_toolbar_get_icon_name (window, "view-list");
+  action_entry.menu_item_icon_name = icon_name;
+  view_switcher_item = xfce_gtk_menu_item_new_from_action_entry (&action_entry, G_OBJECT (window), GTK_MENU_SHELL (view_switcher_menu));
+  gtk_widget_set_tooltip_markup (view_switcher_item, action_entry.menu_item_tooltip_text);
+  gtk_widget_show (view_switcher_item);
+
+  if (window->view_type == THUNAR_TYPE_MILLER_COLUMNS_VIEW)
+    {
+      gtk_widget_set_sensitive (view_switcher_item, FALSE);
+      gtk_image_set_from_icon_name (GTK_IMAGE (image),
+                                    icon_name,
+                                    gtk_tool_item_get_icon_size (toolbar_item));
+    }
+  g_free (icon_name);
+
   gtk_menu_button_set_popup (GTK_MENU_BUTTON (menu_button), view_switcher_menu);
 
   g_list_free (children);
@@ -7150,6 +7241,7 @@ thunar_window_location_toolbar_create (ThunarWindow *window)
   window->location_toolbar_item_icon_view = thunar_window_create_toolbar_radio_item_from_action (window, THUNAR_WINDOW_ACTION_VIEW_AS_ICONS, window->view_type == THUNAR_TYPE_ICON_VIEW, NULL, item_order++);
   window->location_toolbar_item_detailed_view = thunar_window_create_toolbar_radio_item_from_action (window, THUNAR_WINDOW_ACTION_VIEW_AS_DETAILED_LIST, window->view_type == THUNAR_TYPE_DETAILS_VIEW, GTK_RADIO_TOOL_BUTTON (window->location_toolbar_item_icon_view), item_order++);
   window->location_toolbar_item_compact_view = thunar_window_create_toolbar_radio_item_from_action (window, THUNAR_WINDOW_ACTION_VIEW_AS_COMPACT_LIST, window->view_type == THUNAR_TYPE_COMPACT_VIEW, GTK_RADIO_TOOL_BUTTON (window->location_toolbar_item_icon_view), item_order++);
+  window->location_toolbar_item_miller_view = thunar_window_create_toolbar_radio_item_from_action (window, THUNAR_WINDOW_ACTION_VIEW_AS_MILLER_COLUMNS, window->view_type == THUNAR_TYPE_MILLER_COLUMNS_VIEW, GTK_RADIO_TOOL_BUTTON (window->location_toolbar_item_icon_view), item_order++);
   window->location_toolbar_item_view_switcher = thunar_window_create_toolbar_view_switcher (window, item_order++);
 
   g_signal_connect (window->location_toolbar_item_back, "button-press-event", G_CALLBACK (thunar_window_history_clicked), window);
@@ -7165,6 +7257,7 @@ thunar_window_location_toolbar_create (ThunarWindow *window)
   g_signal_connect_swapped (window->location_toolbar_item_icon_view, "toggled", get_action_entry (THUNAR_WINDOW_ACTION_VIEW_AS_ICONS)->callback, window);
   g_signal_connect_swapped (window->location_toolbar_item_detailed_view, "toggled", get_action_entry (THUNAR_WINDOW_ACTION_VIEW_AS_DETAILED_LIST)->callback, window);
   g_signal_connect_swapped (window->location_toolbar_item_compact_view, "toggled", get_action_entry (THUNAR_WINDOW_ACTION_VIEW_AS_COMPACT_LIST)->callback, window);
+  g_signal_connect_swapped (window->location_toolbar_item_miller_view, "toggled", get_action_entry (THUNAR_WINDOW_ACTION_VIEW_AS_MILLER_COLUMNS)->callback, window);
 
   thunar_window_view_switcher_update (window);
 
@@ -7523,7 +7616,7 @@ thunar_window_queue_redraw (ThunarWindow *window)
   _thunar_return_if_fail (THUNAR_IS_WINDOW (window));
 
   if (G_LIKELY (window->view != NULL))
-    thunar_standard_view_queue_redraw (THUNAR_STANDARD_VIEW (window->view));
+    thunar_view_queue_redraw (THUNAR_VIEW (window->view));
 
   // TODO: Redraw as well all other parts of the window
 }

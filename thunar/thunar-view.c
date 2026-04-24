@@ -306,3 +306,49 @@ thunar_view_set_selected_files (ThunarView *view,
   _thunar_return_if_fail (THUNAR_IS_VIEW (view));
   (*THUNAR_VIEW_GET_IFACE (view)->set_selected_files) (view, path_list);
 }
+
+
+
+void
+thunar_view_set_history (ThunarView    *view,
+                         ThunarHistory *history)
+{
+  _thunar_return_if_fail (THUNAR_IS_VIEW (view));
+  (*THUNAR_VIEW_GET_IFACE (view)->set_history) (view, history);
+}
+
+
+
+ThunarHistory *
+thunar_view_get_history (ThunarView *view)
+{
+  _thunar_return_val_if_fail (THUNAR_IS_VIEW (view), NULL);
+  return (*THUNAR_VIEW_GET_IFACE (view)->get_history) (view);
+}
+
+
+
+ThunarHistory *
+thunar_view_copy_history (ThunarView *view)
+{
+  _thunar_return_val_if_fail (THUNAR_IS_VIEW (view), NULL);
+  return (*THUNAR_VIEW_GET_IFACE (view)->copy_history) (view);
+}
+
+
+
+void
+thunar_view_update_statusbar_text (ThunarView *view)
+{
+  _thunar_return_if_fail (THUNAR_IS_VIEW (view));
+  (*THUNAR_VIEW_GET_IFACE (view)->update_statusbar_text) (view);
+}
+
+
+
+void
+thunar_view_queue_redraw (ThunarView *view)
+{
+  _thunar_return_if_fail (THUNAR_IS_VIEW (view));
+  (*THUNAR_VIEW_GET_IFACE (view)->queue_redraw) (view);
+}

@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "$0")" && pwd)"
+binary="${repo_root}/build-clean/thunar/thunar"
+
+if [ ! -x "$binary" ]; then
+  echo "missing build binary: $binary" >&2
+  echo "build first with: meson setup build-clean && meson compile -C build-clean" >&2
+  exit 1
+fi
+
+# The packaged Nix launcher runs Thunar through a sanitized GTK/GIO environment.
+# Keep the local build on the same footing instead of inheriting foreign launcher state.
+unset GSETTINGS_SCHEMA_DIR
+unset LD_LIBRARY_PATH
+unset GTK_PATH
+
+export XDG_DATA_DIRS="${GSETTINGS_SCHEMAS_PATH:-}${XDG_DATA_DIRS:+:${XDG_DATA_DIRS}}"
+
+exec "$binary" "$@"

@@ -219,6 +219,17 @@ thunar_standard_view_get_selected_files_view (ThunarView *view);
 static void
 thunar_standard_view_set_selected_files_view (ThunarView *view,
                                               GList      *selected_files);
+static void
+thunar_standard_view_set_history_view (ThunarView    *view,
+                                       ThunarHistory *history);
+static ThunarHistory *
+thunar_standard_view_get_history_view (ThunarView *view);
+static ThunarHistory *
+thunar_standard_view_copy_history_view (ThunarView *view);
+static void
+thunar_standard_view_update_statusbar_text_view (ThunarView *view);
+static void
+thunar_standard_view_queue_redraw_view (ThunarView *view);
 static gboolean
 thunar_standard_view_select_all_files (ThunarView *view);
 static gboolean
@@ -1025,6 +1036,11 @@ thunar_standard_view_view_init (ThunarViewIface *iface)
   iface->scroll_to_file = thunar_standard_view_scroll_to_file;
   iface->get_selected_files = thunar_standard_view_get_selected_files_view;
   iface->set_selected_files = thunar_standard_view_set_selected_files_view;
+  iface->set_history = thunar_standard_view_set_history_view;
+  iface->get_history = thunar_standard_view_get_history_view;
+  iface->copy_history = thunar_standard_view_copy_history_view;
+  iface->update_statusbar_text = thunar_standard_view_update_statusbar_text_view;
+  iface->queue_redraw = thunar_standard_view_queue_redraw_view;
 }
 
 
@@ -1783,6 +1799,47 @@ thunar_standard_view_set_selected_files_view (ThunarView *view,
                                               GList      *selected_files)
 {
   thunar_standard_view_set_selected_files_component (THUNAR_COMPONENT (view), selected_files);
+}
+
+
+
+static void
+thunar_standard_view_set_history_view (ThunarView    *view,
+                                       ThunarHistory *history)
+{
+  thunar_standard_view_set_history (THUNAR_STANDARD_VIEW (view), history);
+}
+
+
+
+static ThunarHistory *
+thunar_standard_view_get_history_view (ThunarView *view)
+{
+  return thunar_standard_view_get_history (THUNAR_STANDARD_VIEW (view));
+}
+
+
+
+static ThunarHistory *
+thunar_standard_view_copy_history_view (ThunarView *view)
+{
+  return thunar_standard_view_copy_history (THUNAR_STANDARD_VIEW (view));
+}
+
+
+
+static void
+thunar_standard_view_update_statusbar_text_view (ThunarView *view)
+{
+  thunar_standard_view_update_statusbar_text (THUNAR_STANDARD_VIEW (view));
+}
+
+
+
+static void
+thunar_standard_view_queue_redraw_view (ThunarView *view)
+{
+  thunar_standard_view_queue_redraw (THUNAR_STANDARD_VIEW (view));
 }
 
 
