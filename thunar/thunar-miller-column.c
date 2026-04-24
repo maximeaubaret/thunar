@@ -49,6 +49,8 @@ static void thunar_miller_column_cell_data_func (GtkTreeViewColumn *tree_column,
                                                  GtkTreeModel      *model,
                                                  GtkTreeIter       *iter,
                                                  gpointer           user_data);
+static gboolean thunar_miller_column_draw (GtkWidget *widget,
+                                           cairo_t   *cr);
 
 struct _ThunarMillerColumnClass
 {
@@ -65,12 +67,61 @@ struct _ThunarMillerColumn
   GtkWidget           *tree_view;
   GtkCellRenderer     *icon_renderer;
   GtkCellRenderer     *name_renderer;
+  ThunarColumn         sort_column;
+  GtkSortType          sort_order;
   gboolean             show_hidden;
   gboolean             active;
   gboolean             loading;
+  gboolean             folders_first;
 };
 
 G_DEFINE_TYPE (ThunarMillerColumn, thunar_miller_column, GTK_TYPE_SCROLLED_WINDOW)
+
+static void
+thunar_miller_column_get_drop_border_color (GtkWidget *widget,
+                                            GdkRGBA   *color)
+{
+  GtkStyleContext *context;
+
+  context = gtk_widget_get_style_context (widget);
+  if (gtk_style_context_lookup_color (context, "theme_selected_bg_color", color))
+    return;
+
+  color->red = 0.2;
+  color->green = 0.45;
+  color->blue = 0.85;
+  color->alpha = 1.0;
+}
+
+static gboolean
+thunar_miller_column_draw (GtkWidget *widget,
+                           cairo_t   *cr)
+{
+  GtkStyleContext *context;
+  GtkAllocation    allocation;
+  GdkRGBA          color;
+  gboolean         result;
+
+  result = (*GTK_WIDGET_CLASS (thunar_miller_column_parent_class)->draw) (widget, cr);
+
+  context = gtk_widget_get_style_context (widget);
+  if (!gtk_style_context_has_class (context, "miller-column-drop-target"))
+    return result;
+
+  gtk_widget_get_allocation (widget, &allocation);
+  thunar_miller_column_get_drop_border_color (widget, &color);
+
+  cairo_save (cr);
+  gdk_cairo_set_source_rgba (cr, &color);
+  cairo_set_line_width (cr, 2.0);
+  cairo_rectangle (cr, 1.0, 1.0,
+                   MAX (1, allocation.width - 2),
+                   MAX (1, allocation.height - 2));
+  cairo_stroke (cr);
+  cairo_restore (cr);
+
+  return result;
+}
 
 static void
 thunar_miller_column_get_opened_background (ThunarMillerColumn *column,
@@ -443,11 +494,13 @@ static void
 thunar_miller_column_class_init (ThunarMillerColumnClass *klass)
 {
   GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
+  GtkWidgetClass *gtkwidget_class = GTK_WIDGET_CLASS (klass);
 
   gobject_class->dispose = thunar_miller_column_dispose;
   gobject_class->finalize = thunar_miller_column_finalize;
   gobject_class->get_property = thunar_miller_column_get_property;
   gobject_class->set_property = thunar_miller_column_set_property;
+  gtkwidget_class->draw = thunar_miller_column_draw;
 
   g_object_class_install_property (gobject_class,
                                    PROP_DIRECTORY,
@@ -534,8 +587,13 @@ thunar_miller_column_init (ThunarMillerColumn *column)
   gtk_scrolled_window_set_shadow_type (GTK_SCROLLED_WINDOW (column), GTK_SHADOW_NONE);
 
   column->tree_view = gtk_tree_view_new ();
+  column->sort_column = THUNAR_COLUMN_NAME;
+  column->sort_order = GTK_SORT_ASCENDING;
+  column->folders_first = TRUE;
   gtk_tree_view_set_headers_visible (GTK_TREE_VIEW (column->tree_view), FALSE);
   gtk_tree_view_set_enable_search (GTK_TREE_VIEW (column->tree_view), FALSE);
+  gtk_tree_view_set_show_expanders (GTK_TREE_VIEW (column->tree_view), FALSE);
+  gtk_tree_view_set_level_indentation (GTK_TREE_VIEW (column->tree_view), 0);
   gtk_tree_view_set_rubber_banding (GTK_TREE_VIEW (column->tree_view), TRUE);
   gtk_container_add (GTK_CONTAINER (column), column->tree_view);
   gtk_widget_show (column->tree_view);
@@ -646,6 +704,8 @@ thunar_miller_column_set_directory (ThunarMillerColumn *column,
       column->model = g_object_new (THUNAR_TYPE_TREE_VIEW_MODEL, NULL);
       g_signal_connect (column->model, "notify::loading",
                         G_CALLBACK (thunar_miller_column_model_notify_loading), column);
+      g_object_set (G_OBJECT (column->model), "folders-first", column->folders_first, NULL);
+      gtk_tree_sortable_set_sort_column_id (GTK_TREE_SORTABLE (column->model), column->sort_column, column->sort_order);
       thunar_tree_view_model_set_folder (column->model, folder, NULL);
       thunar_tree_view_model_set_show_hidden (column->model, column->show_hidden);
       gtk_tree_view_set_model (GTK_TREE_VIEW (column->tree_view), GTK_TREE_MODEL (column->model));
@@ -695,6 +755,25 @@ thunar_miller_column_set_opened_file (ThunarMillerColumn *column,
   column->opened_file = file != NULL ? g_object_ref (file) : NULL;
 
   gtk_widget_queue_draw (column->tree_view);
+}
+
+void
+thunar_miller_column_set_sorting (ThunarMillerColumn *column,
+                                  ThunarColumn        sort_column,
+                                  GtkSortType         sort_order,
+                                  gboolean            folders_first)
+{
+  _thunar_return_if_fail (THUNAR_IS_MILLER_COLUMN (column));
+
+  column->sort_column = sort_column;
+  column->sort_order = sort_order;
+  column->folders_first = folders_first;
+
+  if (column->model != NULL)
+    {
+      g_object_set (G_OBJECT (column->model), "folders-first", folders_first, NULL);
+      gtk_tree_sortable_set_sort_column_id (GTK_TREE_SORTABLE (column->model), sort_column, sort_order);
+    }
 }
 
 GtkWidget *

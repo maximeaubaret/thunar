@@ -1696,6 +1696,8 @@ thunar_window_update_view_menu (ThunarWindow *window,
   xfce_gtk_menu_append_separator (GTK_MENU_SHELL (menu));
   if (THUNAR_IS_STANDARD_VIEW (window->view))
     thunar_standard_view_append_menu_items (THUNAR_STANDARD_VIEW (window->view), GTK_MENU (menu), window->accel_group);
+  else if (THUNAR_IS_MILLER_COLUMNS_VIEW (window->view))
+    thunar_miller_columns_view_append_menu_items (THUNAR_MILLER_COLUMNS_VIEW (window->view), GTK_MENU (menu), window->accel_group);
   xfce_gtk_menu_append_separator (GTK_MENU_SHELL (menu));
   thunar_window_append_menu_item (window, GTK_MENU_SHELL (menu), THUNAR_WINDOW_ACTION_ZOOM_IN);
   thunar_window_append_menu_item (window, GTK_MENU_SHELL (menu), THUNAR_WINDOW_ACTION_ZOOM_OUT);
@@ -3020,7 +3022,7 @@ thunar_window_create_view (ThunarWindow *window,
     }
   else
     {
-      if (THUNAR_IS_STANDARD_VIEW (window->view))
+      if (THUNAR_IS_STANDARD_VIEW (window->view) || THUNAR_IS_MILLER_COLUMNS_VIEW (window->view))
         {
           g_object_get (window->view, "sort-column", &sort_column, "sort-order", &sort_order, NULL);
         }

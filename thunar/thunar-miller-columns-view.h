@@ -30,6 +30,11 @@ typedef struct _ThunarMillerColumnsView      ThunarMillerColumnsView;
 GType
 thunar_miller_columns_view_get_type (void) G_GNUC_CONST;
 
+void
+thunar_miller_columns_view_append_menu_items (ThunarMillerColumnsView *view,
+                                              GtkMenu                 *menu,
+                                              GtkAccelGroup           *accel_group);
+
 G_END_DECLS;
 
 #endif /* !__THUNAR_MILLER_COLUMNS_VIEW_H__ */

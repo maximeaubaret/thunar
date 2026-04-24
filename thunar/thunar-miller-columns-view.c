@@ -35,7 +35,17 @@ static void thunar_miller_columns_view_view_init (ThunarViewIface *iface);
 static void thunar_miller_columns_view_connect_column (ThunarMillerColumnsView *view,
                                                        GtkWidget               *column_widget);
 static void thunar_miller_columns_view_sync_action_directory (ThunarMillerColumnsView *view);
+static gboolean thunar_miller_columns_view_action_sort_by_name (ThunarMillerColumnsView *view);
+static gboolean thunar_miller_columns_view_action_sort_by_size (ThunarMillerColumnsView *view);
+static gboolean thunar_miller_columns_view_action_sort_by_type (ThunarMillerColumnsView *view);
+static gboolean thunar_miller_columns_view_action_sort_by_date (ThunarMillerColumnsView *view);
+static gboolean thunar_miller_columns_view_action_sort_by_date_deleted (ThunarMillerColumnsView *view);
+static gboolean thunar_miller_columns_view_action_sort_ascending (ThunarMillerColumnsView *view);
+static gboolean thunar_miller_columns_view_action_sort_descending (ThunarMillerColumnsView *view);
+static gboolean thunar_miller_columns_view_action_sort_folders_first (ThunarMillerColumnsView *view);
+static gboolean thunar_miller_columns_view_toggle_sort_order (ThunarMillerColumnsView *view);
 static void thunar_miller_columns_view_update_file_drag_mode (ThunarMillerColumnsView *view);
+static void thunar_miller_columns_view_update_folders_first (ThunarMillerColumnsView *view);
 static void thunar_miller_columns_view_drag_leave (GtkWidget               *widget,
                                                    GdkDragContext          *context,
                                                    guint                    timestamp,
@@ -49,8 +59,11 @@ enum
   PROP_SHOW_HIDDEN,
   PROP_ZOOM_LEVEL,
   PROP_LOADING,
+  PROP_SORT_COLUMN,
   PROP_SORT_COLUMN_DEFAULT,
+  PROP_SORT_ORDER,
   PROP_SORT_ORDER_DEFAULT,
+  PROP_SORT_FOLDERS_FIRST_DEFAULT,
   PROP_PRELOAD_PREVIEW_IMAGES,
   PROP_DISPLAY_NAME,
   PROP_FULL_PARSED_PATH,
@@ -64,6 +77,20 @@ enum
 {
   START_OPEN_LOCATION,
   LAST_SIGNAL,
+};
+
+enum
+{
+  THUNAR_MILLER_COLUMNS_VIEW_ACTION_ARRANGE_ITEMS_MENU,
+  THUNAR_MILLER_COLUMNS_VIEW_ACTION_SORT_BY_NAME,
+  THUNAR_MILLER_COLUMNS_VIEW_ACTION_SORT_BY_SIZE,
+  THUNAR_MILLER_COLUMNS_VIEW_ACTION_SORT_BY_TYPE,
+  THUNAR_MILLER_COLUMNS_VIEW_ACTION_SORT_BY_MTIME,
+  THUNAR_MILLER_COLUMNS_VIEW_ACTION_SORT_BY_DTIME,
+  THUNAR_MILLER_COLUMNS_VIEW_ACTION_SORT_ASCENDING,
+  THUNAR_MILLER_COLUMNS_VIEW_ACTION_SORT_DESCENDING,
+  THUNAR_MILLER_COLUMNS_VIEW_ACTION_SORT_ORDER_TOGGLE,
+  THUNAR_MILLER_COLUMNS_VIEW_ACTION_SORT_FOLDERS_FIRST,
 };
 
 enum
@@ -82,6 +109,22 @@ static const GtkTargetEntry drop_targets[] =
 {
   { "text/uri-list", 0, TARGET_TEXT_URI_LIST, },
 };
+
+static XfceGtkActionEntry miller_columns_view_action_entries[] =
+{
+  { THUNAR_MILLER_COLUMNS_VIEW_ACTION_ARRANGE_ITEMS_MENU, "<Actions>/ThunarMillerColumnsView/arrange-items-menu", "", XFCE_GTK_MENU_ITEM, N_ ("Arran_ge Items"), NULL, NULL, G_CALLBACK (NULL), },
+  { THUNAR_MILLER_COLUMNS_VIEW_ACTION_SORT_BY_NAME, "<Actions>/ThunarMillerColumnsView/sort-by-name", "", XFCE_GTK_RADIO_MENU_ITEM, N_ ("By _Name"), N_ ("Keep items sorted by their name"), NULL, G_CALLBACK (thunar_miller_columns_view_action_sort_by_name), },
+  { THUNAR_MILLER_COLUMNS_VIEW_ACTION_SORT_BY_SIZE, "<Actions>/ThunarMillerColumnsView/sort-by-size", "", XFCE_GTK_RADIO_MENU_ITEM, N_ ("By _Size"), N_ ("Keep items sorted by their size"), NULL, G_CALLBACK (thunar_miller_columns_view_action_sort_by_size), },
+  { THUNAR_MILLER_COLUMNS_VIEW_ACTION_SORT_BY_TYPE, "<Actions>/ThunarMillerColumnsView/sort-by-type", "", XFCE_GTK_RADIO_MENU_ITEM, N_ ("By _Type"), N_ ("Keep items sorted by their type"), NULL, G_CALLBACK (thunar_miller_columns_view_action_sort_by_type), },
+  { THUNAR_MILLER_COLUMNS_VIEW_ACTION_SORT_BY_MTIME, "<Actions>/ThunarMillerColumnsView/sort-by-mtime", "", XFCE_GTK_RADIO_MENU_ITEM, N_ ("By _Modification Date"), N_ ("Keep items sorted by their modification date"), NULL, G_CALLBACK (thunar_miller_columns_view_action_sort_by_date), },
+  { THUNAR_MILLER_COLUMNS_VIEW_ACTION_SORT_BY_DTIME, "<Actions>/ThunarMillerColumnsView/sort-by-dtime", "", XFCE_GTK_RADIO_MENU_ITEM, N_ ("By D_eletion Date"), N_ ("Keep items sorted by their deletion date"), NULL, G_CALLBACK (thunar_miller_columns_view_action_sort_by_date_deleted), },
+  { THUNAR_MILLER_COLUMNS_VIEW_ACTION_SORT_ASCENDING, "<Actions>/ThunarMillerColumnsView/sort-ascending", "", XFCE_GTK_RADIO_MENU_ITEM, N_ ("_Ascending"), N_ ("Sort items in ascending order"), NULL, G_CALLBACK (thunar_miller_columns_view_action_sort_ascending), },
+  { THUNAR_MILLER_COLUMNS_VIEW_ACTION_SORT_DESCENDING, "<Actions>/ThunarMillerColumnsView/sort-descending", "", XFCE_GTK_RADIO_MENU_ITEM, N_ ("_Descending"), N_ ("Sort items in descending order"), NULL, G_CALLBACK (thunar_miller_columns_view_action_sort_descending), },
+  { THUNAR_MILLER_COLUMNS_VIEW_ACTION_SORT_ORDER_TOGGLE, "<Actions>/ThunarMillerColumnsView/toggle-sort-order", "", XFCE_GTK_CHECK_MENU_ITEM, N_ ("_Reversed Order"), N_ ("Reverse the sort order"), NULL, G_CALLBACK (thunar_miller_columns_view_toggle_sort_order), },
+  { THUNAR_MILLER_COLUMNS_VIEW_ACTION_SORT_FOLDERS_FIRST, "<Actions>/ThunarMillerColumnsView/sort-folders-first", "", XFCE_GTK_CHECK_MENU_ITEM, N_ ("_Folders First"), N_ ("Sort folders before files"), NULL, G_CALLBACK (thunar_miller_columns_view_action_sort_folders_first), },
+};
+
+#define get_miller_action_entry(id) xfce_gtk_get_action_entry_by_id (miller_columns_view_action_entries, G_N_ELEMENTS (miller_columns_view_action_entries), id)
 
 struct _ThunarMillerColumnsViewClass
 {
@@ -107,6 +150,11 @@ struct _ThunarMillerColumnsView
   gboolean           rebuilding;
   gboolean           preload_preview_images;
   ThunarZoomLevel    zoom_level;
+  ThunarColumn       sort_column;
+  ThunarColumn       sort_column_default;
+  GtkSortType        sort_order;
+  GtkSortType        sort_order_default;
+  gboolean           sort_folders_first_default;
   GtkAccelGroup     *accel_group;
   ThunarHistory     *history;
   ThunarFile        *pending_directory;
@@ -141,6 +189,123 @@ thunar_miller_columns_view_collect_ancestors (ThunarFile *directory)
     }
 
   return ancestors;
+}
+
+static void
+thunar_miller_columns_view_apply_sorting (ThunarMillerColumnsView *view)
+{
+  GList *lp;
+
+  for (lp = view->columns; lp != NULL; lp = lp->next)
+    thunar_miller_column_set_sorting (THUNAR_MILLER_COLUMN (lp->data),
+                                      view->sort_column,
+                                      view->sort_order,
+                                      view->sort_folders_first_default);
+}
+
+static void
+thunar_miller_columns_view_store_sorting (ThunarMillerColumnsView *view)
+{
+  g_object_set (view->preferences,
+                "last-sort-column", view->sort_column,
+                "last-sort-order", view->sort_order,
+                NULL);
+}
+
+static void
+thunar_miller_columns_view_set_sort_column (ThunarMillerColumnsView *view,
+                                            ThunarColumn             sort_column)
+{
+  GtkSortType sort_order = view->sort_order;
+
+  if (sort_column >= THUNAR_N_VISIBLE_COLUMNS)
+    sort_column = THUNAR_COLUMN_NAME;
+
+  if (view->sort_column == sort_column)
+    sort_order = sort_order == GTK_SORT_ASCENDING ? GTK_SORT_DESCENDING : GTK_SORT_ASCENDING;
+
+  view->sort_column = sort_column;
+  view->sort_order = sort_order;
+  thunar_miller_columns_view_apply_sorting (view);
+  thunar_miller_columns_view_store_sorting (view);
+  g_object_notify (G_OBJECT (view), "sort-column");
+  g_object_notify (G_OBJECT (view), "sort-order");
+}
+
+static void
+thunar_miller_columns_view_set_sort_order (ThunarMillerColumnsView *view,
+                                           GtkSortType              sort_order)
+{
+  if (view->sort_order == sort_order)
+    return;
+
+  view->sort_order = sort_order;
+  thunar_miller_columns_view_apply_sorting (view);
+  thunar_miller_columns_view_store_sorting (view);
+  g_object_notify (G_OBJECT (view), "sort-order");
+}
+
+static gboolean
+thunar_miller_columns_view_action_sort_by_name (ThunarMillerColumnsView *view)
+{
+  thunar_miller_columns_view_set_sort_column (view, THUNAR_COLUMN_NAME);
+  return TRUE;
+}
+
+static gboolean
+thunar_miller_columns_view_action_sort_by_size (ThunarMillerColumnsView *view)
+{
+  thunar_miller_columns_view_set_sort_column (view, THUNAR_COLUMN_SIZE);
+  return TRUE;
+}
+
+static gboolean
+thunar_miller_columns_view_action_sort_by_type (ThunarMillerColumnsView *view)
+{
+  thunar_miller_columns_view_set_sort_column (view, THUNAR_COLUMN_TYPE);
+  return TRUE;
+}
+
+static gboolean
+thunar_miller_columns_view_action_sort_by_date (ThunarMillerColumnsView *view)
+{
+  thunar_miller_columns_view_set_sort_column (view, THUNAR_COLUMN_DATE_MODIFIED);
+  return TRUE;
+}
+
+static gboolean
+thunar_miller_columns_view_action_sort_by_date_deleted (ThunarMillerColumnsView *view)
+{
+  thunar_miller_columns_view_set_sort_column (view, THUNAR_COLUMN_DATE_DELETED);
+  return TRUE;
+}
+
+static gboolean
+thunar_miller_columns_view_action_sort_ascending (ThunarMillerColumnsView *view)
+{
+  thunar_miller_columns_view_set_sort_order (view, GTK_SORT_ASCENDING);
+  return TRUE;
+}
+
+static gboolean
+thunar_miller_columns_view_action_sort_descending (ThunarMillerColumnsView *view)
+{
+  thunar_miller_columns_view_set_sort_order (view, GTK_SORT_DESCENDING);
+  return TRUE;
+}
+
+static gboolean
+thunar_miller_columns_view_toggle_sort_order (ThunarMillerColumnsView *view)
+{
+  thunar_miller_columns_view_set_sort_column (view, view->sort_column);
+  return TRUE;
+}
+
+static gboolean
+thunar_miller_columns_view_action_sort_folders_first (ThunarMillerColumnsView *view)
+{
+  g_object_set (view->preferences, "misc-folders-first", !view->sort_folders_first_default, NULL);
+  return TRUE;
 }
 
 static void
@@ -288,6 +453,7 @@ thunar_miller_columns_view_set_drop_highlight_column (ThunarMillerColumnsView *v
     {
       gtk_style_context_remove_class (gtk_widget_get_style_context (view->drop_highlight_column),
                                       "miller-column-drop-target");
+      gtk_widget_queue_draw (view->drop_highlight_column);
       tree_view = thunar_miller_column_get_tree_view (THUNAR_MILLER_COLUMN (view->drop_highlight_column));
       if (tree_view != NULL)
         gtk_tree_view_set_drag_dest_row (GTK_TREE_VIEW (tree_view), NULL, 0);
@@ -296,8 +462,11 @@ thunar_miller_columns_view_set_drop_highlight_column (ThunarMillerColumnsView *v
   view->drop_highlight_column = widget;
 
   if (view->drop_highlight_column != NULL)
-    gtk_style_context_add_class (gtk_widget_get_style_context (view->drop_highlight_column),
-                                 "miller-column-drop-target");
+    {
+      gtk_style_context_add_class (gtk_widget_get_style_context (view->drop_highlight_column),
+                                   "miller-column-drop-target");
+      gtk_widget_queue_draw (view->drop_highlight_column);
+    }
 }
 
 static void
@@ -598,6 +767,19 @@ thunar_miller_columns_view_update_file_drag_mode (ThunarMillerColumnsView *view)
 }
 
 static void
+thunar_miller_columns_view_update_folders_first (ThunarMillerColumnsView *view)
+{
+  gboolean folders_first;
+
+  g_object_get (view->preferences, "misc-folders-first", &folders_first, NULL);
+  if (view->sort_folders_first_default == folders_first)
+    return;
+
+  view->sort_folders_first_default = folders_first;
+  thunar_miller_columns_view_apply_sorting (view);
+}
+
+static void
 thunar_miller_columns_view_scroll_to_active_column (ThunarMillerColumnsView *view)
 {
   GtkAdjustment *hadjustment;
@@ -783,6 +965,10 @@ thunar_miller_columns_view_append_column (ThunarMillerColumnsView *view,
   column_widget = thunar_miller_column_new ();
   thunar_miller_column_set_show_hidden (THUNAR_MILLER_COLUMN (column_widget), view->show_hidden);
   thunar_miller_column_set_zoom_level (THUNAR_MILLER_COLUMN (column_widget), view->zoom_level);
+  thunar_miller_column_set_sorting (THUNAR_MILLER_COLUMN (column_widget),
+                                    view->sort_column,
+                                    view->sort_order,
+                                    view->sort_folders_first_default);
   thunar_miller_column_set_directory (THUNAR_MILLER_COLUMN (column_widget), directory);
   thunar_miller_columns_view_connect_column (view, column_widget);
   gtk_box_pack_start (GTK_BOX (view->columns_box), column_widget, FALSE, FALSE, 0);
@@ -884,8 +1070,10 @@ thunar_miller_columns_view_column_context_menu (ThunarMillerColumn      *column,
       thunar_menu_add_sections (menu, THUNAR_MENU_SECTION_CREATE_NEW_FILES
                                       | THUNAR_MENU_SECTION_COPY_PASTE
                                       | THUNAR_MENU_SECTION_EMPTY_TRASH
-                                      | THUNAR_MENU_SECTION_CUSTOM_ACTIONS
-                                      | THUNAR_MENU_SECTION_ZOOM
+                                      | THUNAR_MENU_SECTION_CUSTOM_ACTIONS);
+      thunar_miller_columns_view_append_menu_items (view, GTK_MENU (menu), NULL);
+      xfce_gtk_menu_append_separator (GTK_MENU_SHELL (menu));
+      thunar_menu_add_sections (menu, THUNAR_MENU_SECTION_ZOOM
                                       | THUNAR_MENU_SECTION_PROPERTIES);
     }
 
@@ -1079,6 +1267,10 @@ thunar_miller_columns_view_dispose (GObject *object)
     g_signal_handlers_disconnect_by_func (view->preferences,
                                           thunar_miller_columns_view_update_file_drag_mode,
                                           view);
+  if (view->preferences != NULL)
+    g_signal_handlers_disconnect_by_func (view->preferences,
+                                          thunar_miller_columns_view_update_folders_first,
+                                          view);
 
   (*G_OBJECT_CLASS (thunar_miller_columns_view_parent_class)->dispose) (object);
 }
@@ -1135,6 +1327,14 @@ thunar_miller_columns_view_get_property (GObject    *object,
 
     case PROP_LOADING:
       g_value_set_boolean (value, view->loading);
+      break;
+
+    case PROP_SORT_COLUMN:
+      g_value_set_enum (value, view->sort_column);
+      break;
+
+    case PROP_SORT_ORDER:
+      g_value_set_enum (value, view->sort_order);
       break;
 
     case PROP_DISPLAY_NAME:
@@ -1196,8 +1396,31 @@ thunar_miller_columns_view_set_property (GObject      *object,
       thunar_view_set_zoom_level (THUNAR_VIEW (view), g_value_get_enum (value));
       break;
 
+    case PROP_SORT_COLUMN:
+      thunar_miller_columns_view_set_sort_column (view, g_value_get_enum (value));
+      break;
+
     case PROP_SORT_COLUMN_DEFAULT:
+      view->sort_column_default = g_value_get_enum (value);
+      if (view->sort_column_default >= THUNAR_N_VISIBLE_COLUMNS)
+        view->sort_column_default = THUNAR_COLUMN_NAME;
+      view->sort_column = view->sort_column_default;
+      thunar_miller_columns_view_apply_sorting (view);
+      break;
+
+    case PROP_SORT_ORDER:
+      thunar_miller_columns_view_set_sort_order (view, g_value_get_enum (value));
+      break;
+
     case PROP_SORT_ORDER_DEFAULT:
+      view->sort_order_default = g_value_get_enum (value);
+      view->sort_order = view->sort_order_default;
+      thunar_miller_columns_view_apply_sorting (view);
+      break;
+
+    case PROP_SORT_FOLDERS_FIRST_DEFAULT:
+      view->sort_folders_first_default = g_value_get_boolean (value);
+      thunar_miller_columns_view_apply_sorting (view);
       break;
 
     case PROP_PRELOAD_PREVIEW_IMAGES:
@@ -1457,6 +1680,43 @@ thunar_miller_columns_view_queue_redraw_view (ThunarView *view)
   gtk_widget_queue_draw (GTK_WIDGET (view));
 }
 
+void
+thunar_miller_columns_view_append_menu_items (ThunarMillerColumnsView *view,
+                                              GtkMenu                 *menu,
+                                              GtkAccelGroup           *accel_group)
+{
+  GtkWidget *item;
+  GtkWidget *submenu;
+
+  _thunar_return_if_fail (THUNAR_IS_MILLER_COLUMNS_VIEW (view));
+
+  item = xfce_gtk_menu_item_new_from_action_entry (get_miller_action_entry (THUNAR_MILLER_COLUMNS_VIEW_ACTION_ARRANGE_ITEMS_MENU), NULL, GTK_MENU_SHELL (menu));
+  submenu = gtk_menu_new ();
+  xfce_gtk_toggle_menu_item_new_from_action_entry (get_miller_action_entry (THUNAR_MILLER_COLUMNS_VIEW_ACTION_SORT_BY_NAME), G_OBJECT (view),
+                                                   view->sort_column == THUNAR_COLUMN_NAME, GTK_MENU_SHELL (submenu));
+  xfce_gtk_toggle_menu_item_new_from_action_entry (get_miller_action_entry (THUNAR_MILLER_COLUMNS_VIEW_ACTION_SORT_BY_SIZE), G_OBJECT (view),
+                                                   view->sort_column == THUNAR_COLUMN_SIZE, GTK_MENU_SHELL (submenu));
+  xfce_gtk_toggle_menu_item_new_from_action_entry (get_miller_action_entry (THUNAR_MILLER_COLUMNS_VIEW_ACTION_SORT_BY_TYPE), G_OBJECT (view),
+                                                   view->sort_column == THUNAR_COLUMN_TYPE, GTK_MENU_SHELL (submenu));
+  xfce_gtk_toggle_menu_item_new_from_action_entry (get_miller_action_entry (THUNAR_MILLER_COLUMNS_VIEW_ACTION_SORT_BY_MTIME), G_OBJECT (view),
+                                                   view->sort_column == THUNAR_COLUMN_DATE_MODIFIED, GTK_MENU_SHELL (submenu));
+  if (view->current_directory != NULL && thunar_file_is_trashed (view->current_directory))
+    xfce_gtk_toggle_menu_item_new_from_action_entry (get_miller_action_entry (THUNAR_MILLER_COLUMNS_VIEW_ACTION_SORT_BY_DTIME), G_OBJECT (view),
+                                                     view->sort_column == THUNAR_COLUMN_DATE_DELETED, GTK_MENU_SHELL (submenu));
+  xfce_gtk_menu_append_separator (GTK_MENU_SHELL (submenu));
+  xfce_gtk_toggle_menu_item_new_from_action_entry (get_miller_action_entry (THUNAR_MILLER_COLUMNS_VIEW_ACTION_SORT_ASCENDING), G_OBJECT (view),
+                                                   view->sort_order == GTK_SORT_ASCENDING, GTK_MENU_SHELL (submenu));
+  xfce_gtk_toggle_menu_item_new_from_action_entry (get_miller_action_entry (THUNAR_MILLER_COLUMNS_VIEW_ACTION_SORT_DESCENDING), G_OBJECT (view),
+                                                   view->sort_order == GTK_SORT_DESCENDING, GTK_MENU_SHELL (submenu));
+  xfce_gtk_toggle_menu_item_new_from_action_entry (get_miller_action_entry (THUNAR_MILLER_COLUMNS_VIEW_ACTION_SORT_ORDER_TOGGLE), G_OBJECT (view),
+                                                   view->sort_order == GTK_SORT_DESCENDING, GTK_MENU_SHELL (submenu));
+  xfce_gtk_menu_append_separator (GTK_MENU_SHELL (submenu));
+  xfce_gtk_toggle_menu_item_new_from_action_entry (get_miller_action_entry (THUNAR_MILLER_COLUMNS_VIEW_ACTION_SORT_FOLDERS_FIRST), G_OBJECT (view),
+                                                   view->sort_folders_first_default, GTK_MENU_SHELL (submenu));
+  gtk_menu_item_set_submenu (GTK_MENU_ITEM (item), GTK_WIDGET (submenu));
+  gtk_widget_show (item);
+}
+
 static void
 thunar_miller_columns_view_navigator_init (ThunarNavigatorIface *iface)
 {
@@ -1515,6 +1775,14 @@ thunar_miller_columns_view_class_init (ThunarMillerColumnsViewClass *klass)
                                                          FALSE,
                                                          G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
   g_object_class_install_property (gobject_class,
+                                   PROP_SORT_COLUMN,
+                                   g_param_spec_enum ("sort-column",
+                                                      "sort-column",
+                                                      "sort-column",
+                                                      THUNAR_TYPE_COLUMN,
+                                                      THUNAR_COLUMN_NAME,
+                                                      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject_class,
                                    PROP_SORT_COLUMN_DEFAULT,
                                    g_param_spec_enum ("sort-column-default",
                                                       "sort-column-default",
@@ -1523,6 +1791,14 @@ thunar_miller_columns_view_class_init (ThunarMillerColumnsViewClass *klass)
                                                       THUNAR_COLUMN_NAME,
                                                       G_PARAM_WRITABLE | G_PARAM_CONSTRUCT_ONLY | G_PARAM_STATIC_STRINGS));
   g_object_class_install_property (gobject_class,
+                                   PROP_SORT_ORDER,
+                                   g_param_spec_enum ("sort-order",
+                                                      "sort-order",
+                                                      "sort-order",
+                                                      GTK_TYPE_SORT_TYPE,
+                                                      GTK_SORT_ASCENDING,
+                                                      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject_class,
                                    PROP_SORT_ORDER_DEFAULT,
                                    g_param_spec_enum ("sort-order-default",
                                                       "sort-order-default",
@@ -1530,6 +1806,13 @@ thunar_miller_columns_view_class_init (ThunarMillerColumnsViewClass *klass)
                                                       GTK_TYPE_SORT_TYPE,
                                                       GTK_SORT_ASCENDING,
                                                       G_PARAM_WRITABLE | G_PARAM_CONSTRUCT_ONLY | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject_class,
+                                   PROP_SORT_FOLDERS_FIRST_DEFAULT,
+                                   g_param_spec_boolean ("sort-folders-first-default",
+                                                         "sort-folders-first-default",
+                                                         "sort-folders-first-default",
+                                                         TRUE,
+                                                         G_PARAM_WRITABLE | G_PARAM_STATIC_STRINGS));
   g_object_class_install_property (gobject_class,
                                    PROP_PRELOAD_PREVIEW_IMAGES,
                                    g_param_spec_boolean ("preload-preview-images",
@@ -1598,11 +1881,18 @@ thunar_miller_columns_view_init (ThunarMillerColumnsView *view)
   view->preferences = thunar_preferences_get ();
   view->pending_directory_column_index = -1;
   view->applying_directory_change_column_index = -1;
+  view->sort_column = THUNAR_COLUMN_NAME;
+  view->sort_column_default = THUNAR_COLUMN_NAME;
+  view->sort_order = GTK_SORT_ASCENDING;
+  view->sort_order_default = GTK_SORT_ASCENDING;
+  g_object_get (view->preferences, "misc-folders-first", &view->sort_folders_first_default, NULL);
   view->history = g_object_new (THUNAR_TYPE_HISTORY, NULL);
   g_signal_connect_swapped (view->history, "change-directory",
                             G_CALLBACK (thunar_navigator_change_directory), view);
   g_signal_connect_swapped (view->preferences, "notify::misc-file-drag-mode",
                             G_CALLBACK (thunar_miller_columns_view_update_file_drag_mode), view);
+  g_signal_connect_swapped (view->preferences, "notify::misc-folders-first",
+                            G_CALLBACK (thunar_miller_columns_view_update_folders_first), view);
 
   gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (view),
                                   GTK_POLICY_AUTOMATIC,

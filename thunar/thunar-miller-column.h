@@ -50,6 +50,11 @@ thunar_miller_column_set_selected_file (ThunarMillerColumn *column,
 void
 thunar_miller_column_set_opened_file (ThunarMillerColumn *column,
                                       ThunarFile         *file);
+void
+thunar_miller_column_set_sorting (ThunarMillerColumn *column,
+                                  ThunarColumn        sort_column,
+                                  GtkSortType         sort_order,
+                                  gboolean            folders_first);
 GtkWidget *
 thunar_miller_column_get_tree_view (ThunarMillerColumn *column);
 ThunarFile *
