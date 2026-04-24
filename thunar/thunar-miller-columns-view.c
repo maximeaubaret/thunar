@@ -32,6 +32,7 @@
 static void thunar_miller_columns_view_navigator_init (ThunarNavigatorIface *iface);
 static void thunar_miller_columns_view_component_init (ThunarComponentIface *iface);
 static void thunar_miller_columns_view_view_init (ThunarViewIface *iface);
+static void thunar_miller_columns_view_grab_focus (GtkWidget *widget);
 static void thunar_miller_columns_view_connect_column (ThunarMillerColumnsView *view,
                                                        GtkWidget               *column_widget);
 static void thunar_miller_columns_view_sync_action_directory (ThunarMillerColumnsView *view);
@@ -399,11 +400,47 @@ thunar_miller_columns_view_set_active_column (ThunarMillerColumnsView *view,
   if (grab_focus)
     {
       ThunarMillerColumn *active_column;
+      GtkWidget          *next_column;
+      ThunarFile         *selected_file;
+      ThunarFile         *opened_directory;
 
       active_column = g_list_nth_data (view->columns, active_column_index);
       if (active_column != NULL)
-        thunar_miller_column_grab_focus (active_column);
+        {
+          selected_file = thunar_miller_column_get_selected_file (active_column);
+          if (selected_file == NULL)
+            {
+              next_column = g_list_nth_data (view->columns, active_column_index + 1);
+              opened_directory = next_column != NULL
+                               ? thunar_miller_column_get_directory (THUNAR_MILLER_COLUMN (next_column))
+                               : NULL;
+              if (opened_directory != NULL)
+                thunar_miller_column_set_selected_file (active_column, opened_directory);
+            }
+          else
+            {
+              g_object_unref (selected_file);
+            }
+
+          thunar_miller_column_grab_focus (active_column);
+        }
     }
+}
+
+static void
+thunar_miller_columns_view_grab_focus (GtkWidget *widget)
+{
+  ThunarMillerColumnsView *view = THUNAR_MILLER_COLUMNS_VIEW (widget);
+  ThunarMillerColumn      *active_column;
+
+  active_column = g_list_nth_data (view->columns, view->active_column_index);
+  if (active_column == NULL)
+    active_column = g_list_last (view->columns) != NULL ? g_list_last (view->columns)->data : NULL;
+
+  if (active_column != NULL)
+    thunar_miller_column_grab_focus (active_column);
+  else
+    (*GTK_WIDGET_CLASS (thunar_miller_columns_view_parent_class)->grab_focus) (widget);
 }
 
 static void
@@ -1756,11 +1793,13 @@ static void
 thunar_miller_columns_view_class_init (ThunarMillerColumnsViewClass *klass)
 {
   GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
+  GtkWidgetClass *gtkwidget_class = GTK_WIDGET_CLASS (klass);
 
   gobject_class->dispose = thunar_miller_columns_view_dispose;
   gobject_class->finalize = thunar_miller_columns_view_finalize;
   gobject_class->get_property = thunar_miller_columns_view_get_property;
   gobject_class->set_property = thunar_miller_columns_view_set_property;
+  gtkwidget_class->grab_focus = thunar_miller_columns_view_grab_focus;
 
   g_object_class_override_property (gobject_class, PROP_CURRENT_DIRECTORY, "current-directory");
   g_object_class_override_property (gobject_class, PROP_SELECTED_FILES, "selected-files");

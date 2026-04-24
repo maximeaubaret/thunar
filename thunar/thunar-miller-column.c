@@ -237,6 +237,53 @@ thunar_miller_column_set_cursor_first_or_last (ThunarMillerColumn *column,
   return TRUE;
 }
 
+static gboolean
+thunar_miller_column_cursor_is_first_or_last (ThunarMillerColumn *column,
+                                              gboolean            first)
+{
+  GtkTreeModel *model;
+  GtkTreePath  *cursor_path = NULL;
+  GtkTreePath  *boundary_path;
+  gint          n_children;
+  gboolean      result = FALSE;
+
+  model = gtk_tree_view_get_model (GTK_TREE_VIEW (column->tree_view));
+  if (model == NULL)
+    return TRUE;
+
+  n_children = gtk_tree_model_iter_n_children (model, NULL);
+  if (n_children <= 0)
+    return TRUE;
+
+  gtk_tree_view_get_cursor (GTK_TREE_VIEW (column->tree_view), &cursor_path, NULL);
+  if (cursor_path == NULL)
+    return FALSE;
+
+  boundary_path = first ? gtk_tree_path_new_first ()
+                        : gtk_tree_path_new_from_indices (n_children - 1, -1);
+  result = gtk_tree_path_compare (cursor_path, boundary_path) == 0;
+
+  gtk_tree_path_free (boundary_path);
+  gtk_tree_path_free (cursor_path);
+
+  return result;
+}
+
+static gboolean
+thunar_miller_column_ensure_cursor (ThunarMillerColumn *column)
+{
+  GtkTreePath *cursor_path = NULL;
+
+  gtk_tree_view_get_cursor (GTK_TREE_VIEW (column->tree_view), &cursor_path, NULL);
+  if (cursor_path != NULL)
+    {
+      gtk_tree_path_free (cursor_path);
+      return TRUE;
+    }
+
+  return thunar_miller_column_set_cursor_first_or_last (column, TRUE);
+}
+
 static void
 thunar_miller_column_block_selection_changed (ThunarMillerColumn *column,
                                               gboolean            block)
@@ -449,7 +496,7 @@ thunar_miller_column_key_press (GtkWidget          *widget,
           return TRUE;
         }
       gtk_tree_path_free (cursor_path);
-      return FALSE;
+      return thunar_miller_column_cursor_is_first_or_last (column, TRUE);
 
     case GDK_KEY_Down:
     case GDK_KEY_KP_Down:
@@ -460,7 +507,7 @@ thunar_miller_column_key_press (GtkWidget          *widget,
           return TRUE;
         }
       gtk_tree_path_free (cursor_path);
-      return FALSE;
+      return thunar_miller_column_cursor_is_first_or_last (column, FALSE);
 
     default:
       return FALSE;
@@ -955,6 +1002,7 @@ void
 thunar_miller_column_grab_focus (ThunarMillerColumn *column)
 {
   _thunar_return_if_fail (THUNAR_IS_MILLER_COLUMN (column));
+  thunar_miller_column_ensure_cursor (column);
   gtk_widget_grab_focus (column->tree_view);
 }
 
