@@ -29,6 +29,9 @@
 
 #include <libxfce4ui/libxfce4ui.h>
 
+#define THUNAR_MILLER_COLUMN_MIN_WIDTH 120
+#define THUNAR_MILLER_COLUMN_RESIZE_HANDLE_WIDTH 4
+
 static void thunar_miller_columns_view_navigator_init (ThunarNavigatorIface *iface);
 static void thunar_miller_columns_view_component_init (ThunarComponentIface *iface);
 static void thunar_miller_columns_view_view_init (ThunarViewIface *iface);
@@ -51,6 +54,17 @@ static void thunar_miller_columns_view_drag_leave (GtkWidget               *widg
                                                    GdkDragContext          *context,
                                                    guint                    timestamp,
                                                    ThunarMillerColumnsView *view);
+static gboolean thunar_miller_columns_view_resize_handle_button_press (GtkWidget               *handle,
+                                                                       GdkEventButton          *event,
+                                                                       ThunarMillerColumnsView *view);
+static gboolean thunar_miller_columns_view_resize_handle_button_release (GtkWidget               *handle,
+                                                                         GdkEventButton          *event,
+                                                                         ThunarMillerColumnsView *view);
+static gboolean thunar_miller_columns_view_resize_handle_motion_notify (GtkWidget               *handle,
+                                                                        GdkEventMotion          *event,
+                                                                        ThunarMillerColumnsView *view);
+static void thunar_miller_columns_view_resize_handle_destroy (GtkWidget               *handle,
+                                                              ThunarMillerColumnsView *view);
 
 enum
 {
@@ -170,6 +184,11 @@ struct _ThunarMillerColumnsView
   gboolean           pending_grab_focus;
   gboolean           drop_data_ready;
   gboolean           drop_occurred;
+  gboolean           resize_dragging;
+  GtkWidget         *resize_column;
+  GtkWidget         *resize_handle;
+  gint               resize_start_width;
+  gdouble            resize_start_x_root;
   gchar             *statusbar_text;
 };
 
@@ -957,11 +976,159 @@ thunar_miller_columns_view_column_notify_loading (ThunarMillerColumn      *colum
   thunar_miller_columns_view_update_statusbar_text_internal (view);
 }
 
+static GtkWidget *
+thunar_miller_columns_view_get_column_wrapper (GtkWidget *column_widget)
+{
+  return g_object_get_data (G_OBJECT (column_widget), "thunar-miller-column-wrapper");
+}
+
+static GtkWidget *
+thunar_miller_columns_view_get_column_for_resize_handle (GtkWidget *handle)
+{
+  gpointer column;
+
+  column = g_object_get_data (G_OBJECT (handle), "thunar-miller-column");
+  return THUNAR_IS_MILLER_COLUMN (column) ? GTK_WIDGET (column) : NULL;
+}
+
+static void
+thunar_miller_columns_view_set_resize_cursor (GtkWidget *handle)
+{
+  GdkCursor *cursor;
+  GdkWindow *window;
+
+  if (!gtk_widget_get_realized (handle))
+    return;
+
+  window = gtk_widget_get_window (handle);
+  if (window == NULL)
+    return;
+
+  cursor = gdk_cursor_new_for_display (gtk_widget_get_display (handle), GDK_SB_H_DOUBLE_ARROW);
+  gdk_window_set_cursor (window, cursor);
+  g_object_unref (cursor);
+}
+
+static void
+thunar_miller_columns_view_end_column_resize (ThunarMillerColumnsView *view)
+{
+  if (!view->resize_dragging)
+    return;
+
+  view->resize_dragging = FALSE;
+  if (view->resize_handle != NULL)
+    gtk_grab_remove (view->resize_handle);
+  view->resize_column = NULL;
+  view->resize_handle = NULL;
+}
+
+static gboolean
+thunar_miller_columns_view_resize_handle_button_press (GtkWidget               *handle,
+                                                       GdkEventButton          *event,
+                                                       ThunarMillerColumnsView *view)
+{
+  GtkWidget *column_widget;
+
+  if (event->type != GDK_BUTTON_PRESS || event->button != 1)
+    return FALSE;
+
+  column_widget = thunar_miller_columns_view_get_column_for_resize_handle (handle);
+  if (column_widget == NULL)
+    return FALSE;
+
+  view->resize_dragging = TRUE;
+  view->resize_column = column_widget;
+  view->resize_handle = handle;
+  view->resize_start_width = gtk_widget_get_allocated_width (column_widget);
+  view->resize_start_x_root = event->x_root;
+
+  gtk_grab_add (handle);
+  thunar_miller_columns_view_set_resize_cursor (handle);
+
+  return TRUE;
+}
+
+static gboolean
+thunar_miller_columns_view_resize_handle_button_release (GtkWidget               *handle,
+                                                         GdkEventButton          *event,
+                                                         ThunarMillerColumnsView *view)
+{
+  if (event->button != 1 || !view->resize_dragging)
+    return FALSE;
+
+  thunar_miller_columns_view_end_column_resize (view);
+  thunar_miller_columns_view_set_resize_cursor (handle);
+
+  return TRUE;
+}
+
+static gboolean
+thunar_miller_columns_view_resize_handle_motion_notify (GtkWidget               *handle,
+                                                        GdkEventMotion          *event,
+                                                        ThunarMillerColumnsView *view)
+{
+  gint width;
+
+  thunar_miller_columns_view_set_resize_cursor (handle);
+
+  if (!view->resize_dragging || view->resize_column == NULL)
+    return FALSE;
+
+  width = view->resize_start_width + (gint) (event->x_root - view->resize_start_x_root);
+  gtk_widget_set_size_request (view->resize_column,
+                               MAX (THUNAR_MILLER_COLUMN_MIN_WIDTH, width),
+                               -1);
+
+  return TRUE;
+}
+
+static void
+thunar_miller_columns_view_resize_handle_destroy (GtkWidget               *handle,
+                                                  ThunarMillerColumnsView *view)
+{
+  if (view->resize_handle == handle)
+    thunar_miller_columns_view_end_column_resize (view);
+}
+
+static GtkWidget *
+thunar_miller_columns_view_create_resize_handle (ThunarMillerColumnsView *view,
+                                                 GtkWidget               *column_widget)
+{
+  GtkWidget *handle;
+  GtkWidget *separator;
+
+  handle = gtk_event_box_new ();
+  gtk_event_box_set_visible_window (GTK_EVENT_BOX (handle), TRUE);
+  gtk_widget_set_size_request (handle, THUNAR_MILLER_COLUMN_RESIZE_HANDLE_WIDTH, -1);
+  gtk_widget_add_events (handle,
+                         GDK_BUTTON_PRESS_MASK
+                         | GDK_BUTTON_RELEASE_MASK
+                         | GDK_POINTER_MOTION_MASK);
+  g_object_set_data (G_OBJECT (handle), "thunar-miller-column", column_widget);
+
+  separator = gtk_separator_new (GTK_ORIENTATION_VERTICAL);
+  gtk_container_add (GTK_CONTAINER (handle), separator);
+  gtk_widget_show (separator);
+
+  g_signal_connect (handle, "button-press-event",
+                    G_CALLBACK (thunar_miller_columns_view_resize_handle_button_press), view);
+  g_signal_connect (handle, "button-release-event",
+                    G_CALLBACK (thunar_miller_columns_view_resize_handle_button_release), view);
+  g_signal_connect (handle, "motion-notify-event",
+                    G_CALLBACK (thunar_miller_columns_view_resize_handle_motion_notify), view);
+  g_signal_connect (handle, "destroy",
+                    G_CALLBACK (thunar_miller_columns_view_resize_handle_destroy), view);
+
+  return handle;
+}
+
 static void
 thunar_miller_columns_view_clear_columns (ThunarMillerColumnsView *view)
 {
   GList *columns;
   GList *lp;
+
+  thunar_miller_columns_view_end_column_resize (view);
 
   columns = view->columns;
   view->columns = NULL;
@@ -969,8 +1136,12 @@ thunar_miller_columns_view_clear_columns (ThunarMillerColumnsView *view)
 
   for (lp = columns; lp != NULL; lp = lp->next)
     {
+      GtkWidget *wrapper;
+
       g_signal_handlers_disconnect_by_data (lp->data, view);
-      gtk_container_remove (GTK_CONTAINER (view->columns_box), GTK_WIDGET (lp->data));
+      wrapper = thunar_miller_columns_view_get_column_wrapper (GTK_WIDGET (lp->data));
+      gtk_container_remove (GTK_CONTAINER (view->columns_box),
+                            wrapper != NULL ? wrapper : GTK_WIDGET (lp->data));
     }
 
   g_list_free (columns);
@@ -988,6 +1159,8 @@ thunar_miller_columns_view_remove_columns_after (ThunarMillerColumnsView *view,
   if (link == NULL)
     return;
 
+  thunar_miller_columns_view_end_column_resize (view);
+
   tail = link->next;
   link->next = NULL;
 
@@ -996,8 +1169,12 @@ thunar_miller_columns_view_remove_columns_after (ThunarMillerColumnsView *view,
 
   for (lp = tail; lp != NULL; lp = lp->next)
     {
+      GtkWidget *wrapper;
+
       g_signal_handlers_disconnect_by_data (lp->data, view);
-      gtk_container_remove (GTK_CONTAINER (view->columns_box), GTK_WIDGET (lp->data));
+      wrapper = thunar_miller_columns_view_get_column_wrapper (GTK_WIDGET (lp->data));
+      gtk_container_remove (GTK_CONTAINER (view->columns_box),
+                            wrapper != NULL ? wrapper : GTK_WIDGET (lp->data));
     }
 
   g_list_free (tail);
@@ -1008,8 +1185,14 @@ thunar_miller_columns_view_append_column (ThunarMillerColumnsView *view,
                                           ThunarFile              *directory)
 {
   GtkWidget *column_widget;
+  GtkWidget *handle;
+  GtkWidget *wrapper;
 
   column_widget = thunar_miller_column_new ();
+  handle = thunar_miller_columns_view_create_resize_handle (view, column_widget);
+  wrapper = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+  g_object_set_data (G_OBJECT (column_widget), "thunar-miller-column-wrapper", wrapper);
+
   thunar_miller_column_set_show_hidden (THUNAR_MILLER_COLUMN (column_widget), view->show_hidden);
   thunar_miller_column_set_zoom_level (THUNAR_MILLER_COLUMN (column_widget), view->zoom_level);
   thunar_miller_column_set_sorting (THUNAR_MILLER_COLUMN (column_widget),
@@ -1018,8 +1201,12 @@ thunar_miller_columns_view_append_column (ThunarMillerColumnsView *view,
                                     view->sort_folders_first_default);
   thunar_miller_column_set_directory (THUNAR_MILLER_COLUMN (column_widget), directory);
   thunar_miller_columns_view_connect_column (view, column_widget);
-  gtk_box_pack_start (GTK_BOX (view->columns_box), column_widget, FALSE, FALSE, 0);
+  gtk_box_pack_start (GTK_BOX (wrapper), column_widget, FALSE, FALSE, 0);
+  gtk_box_pack_start (GTK_BOX (wrapper), handle, FALSE, FALSE, 0);
+  gtk_box_pack_start (GTK_BOX (view->columns_box), wrapper, FALSE, FALSE, 0);
   gtk_widget_show (column_widget);
+  gtk_widget_show (handle);
+  gtk_widget_show (wrapper);
   view->columns = g_list_append (view->columns, column_widget);
 
   return column_widget;

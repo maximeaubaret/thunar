@@ -18,6 +18,8 @@
 #include <gdk/gdkkeysyms.h>
 #include <libxfce4ui/libxfce4ui.h>
 
+#define THUNAR_MILLER_COLUMN_DEFAULT_WIDTH 220
+
 enum
 {
   PROP_0,
@@ -812,7 +814,7 @@ thunar_miller_column_init (ThunarMillerColumn *column)
   g_signal_connect (selection, "changed",
                     G_CALLBACK (thunar_miller_column_selection_changed), column);
 
-  gtk_widget_set_size_request (GTK_WIDGET (column), 220, -1);
+  gtk_widget_set_size_request (GTK_WIDGET (column), THUNAR_MILLER_COLUMN_DEFAULT_WIDTH, -1);
 }
 
 GtkWidget *
