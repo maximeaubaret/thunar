@@ -4,11 +4,39 @@ let
   lib = pkgs.lib;
 
   libxfce4ui_421 = pkgs.libxfce4ui.overrideAttrs (_: {
-    version = "4.21.2";
+    version = "4.21.8";
     src = pkgs.fetchurl {
-      url = "https://archive.xfce.org/src/xfce/libxfce4ui/4.21/libxfce4ui-4.21.2.tar.xz";
-      sha256 = "sha256-xbzBS6CWU3Gp13yf0xKsmhTCq7+qSQ8h3CHWN0nSG0k=";
+      url = "https://archive.xfce.org/src/xfce/libxfce4ui/4.21/libxfce4ui-4.21.8.tar.xz";
+      sha256 = "sha256-5sqvxv5eB3ZeIt2EmhmyHlqkT1HGb6HX23S5QzC9RXs=";
     };
+
+    nativeBuildInputs = with pkgs; [
+      gettext
+      meson
+      ninja
+      pkg-config
+      python3
+      wrapGAppsHook3
+    ];
+
+    configureFlags = [];
+
+    mesonFlags = [
+      "-Dgtk-doc=false"
+      "-Dintrospection=false"
+      "-Dvala=disabled"
+      "-Dvendor-info=NixOS"
+    ];
+
+    # The 4.21.8 Meson build incorrectly records public header dependencies
+    # as private, so consumers do not receive the libxfce4util include path.
+    postPatch = ''
+      patchShebangs xdt-gen-visibility
+      substituteInPlace libxfce4ui/meson.build \
+        --replace-fail \
+          "description: 'Widgets library for Xfce'," \
+          "description: 'Widgets library for Xfce', requires: [gtk, libxfce4util],"
+    '';
   });
 
   cleanSource = lib.cleanSourceWith {
@@ -57,6 +85,7 @@ pkgs.stdenv.mkDerivation (finalAttrs: {
     libice
     libexif
     libgudev
+    libcanberra
     libnotify
     libxfce4ui_421
     libxfce4util
