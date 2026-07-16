@@ -501,6 +501,9 @@ thunar_miller_column_button_press (GtkWidget          *widget,
   GtkTreePath      *path = NULL;
   GtkTreeSelection *selection;
 
+  if (event->button != 3 || event->type != GDK_BUTTON_PRESS)
+    return FALSE;
+
   selection = gtk_tree_view_get_selection (GTK_TREE_VIEW (widget));
 
   if (gtk_tree_view_get_path_at_pos (GTK_TREE_VIEW (widget),
@@ -515,18 +518,13 @@ thunar_miller_column_button_press (GtkWidget          *widget,
         }
       gtk_tree_path_free (path);
     }
-  else if (event->button == 3)
+  else
     {
       gtk_tree_selection_unselect_all (selection);
     }
 
-  if (event->button == 3 && event->type == GDK_BUTTON_PRESS)
-    {
-      g_signal_emit (column, miller_column_signals[SIGNAL_CONTEXT_MENU], 0);
-      return TRUE;
-    }
-
-  return FALSE;
+  g_signal_emit (column, miller_column_signals[SIGNAL_CONTEXT_MENU], 0);
+  return TRUE;
 }
 
 static gboolean
