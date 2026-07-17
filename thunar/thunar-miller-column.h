@@ -71,6 +71,17 @@ thunar_miller_column_get_selected_files (ThunarMillerColumn *column);
 void
 thunar_miller_column_set_selected_files (ThunarMillerColumn *column,
                                          GList              *files);
+void
+thunar_miller_column_select_all (ThunarMillerColumn *column);
+void
+thunar_miller_column_select_by_pattern (ThunarMillerColumn *column,
+                                        const gchar        *pattern,
+                                        gboolean            case_sensitive,
+                                        gboolean            match_diacritics);
+void
+thunar_miller_column_selection_invert (ThunarMillerColumn *column);
+void
+thunar_miller_column_unselect_all (ThunarMillerColumn *column);
 
 gboolean
 thunar_miller_column_get_show_hidden (ThunarMillerColumn *column);
@@ -82,6 +93,8 @@ void
 thunar_miller_column_select_first (ThunarMillerColumn *column);
 void
 thunar_miller_column_grab_focus (ThunarMillerColumn *column);
+void
+thunar_miller_column_cancel_search (ThunarMillerColumn *column);
 
 void
 thunar_miller_column_set_active (ThunarMillerColumn *column,

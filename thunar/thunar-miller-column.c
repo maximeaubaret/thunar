@@ -12,6 +12,7 @@
 
 #include "thunar/thunar-gobject-extensions.h"
 #include "thunar/thunar-icon-renderer.h"
+#include "thunar/thunar-marshal.h"
 #include "thunar/thunar-private.h"
 #include "thunar/thunar-text-renderer.h"
 
@@ -36,6 +37,7 @@ enum
   SIGNAL_CONTEXT_MENU,
   SIGNAL_NAVIGATE_LEFT,
   SIGNAL_NAVIGATE_RIGHT,
+  SIGNAL_START_OPEN_LOCATION,
   SIGNAL_FOCUS_IN,
   LAST_SIGNAL
 };
@@ -180,6 +182,78 @@ thunar_miller_column_event_starts_search (GdkEventKey *event)
     return FALSE;
 
   return gdk_keyval_to_unicode (event->keyval) != 0;
+}
+
+static gboolean
+thunar_miller_column_event_starts_open_location (GdkEventKey *event)
+{
+  return (event->keyval == GDK_KEY_slash
+          || event->keyval == GDK_KEY_asciitilde
+          || event->keyval == GDK_KEY_dead_tilde)
+         && !(event->state & (~GDK_SHIFT_MASK & gtk_accelerator_get_default_mod_mask ()));
+}
+
+static gboolean
+thunar_miller_column_search_owns_key_event (ThunarMillerColumn *column,
+                                            GtkWidget          *grab_widget)
+{
+  GtkWidget *toplevel;
+
+  if (grab_widget == column->tree_view)
+    return TRUE;
+
+  /* GtkTreeView keeps focus on itself while its built-in interactive-search
+   * entry is shown in a modal utility popup. During that time GTK delivers
+   * key events to the popup grab instead of the tree view. */
+  if (!gtk_widget_has_focus (column->tree_view)
+      || !GTK_IS_WINDOW (grab_widget)
+      || gtk_window_get_window_type (GTK_WINDOW (grab_widget)) != GTK_WINDOW_POPUP
+      || !gtk_window_get_modal (GTK_WINDOW (grab_widget))
+      || gtk_window_get_type_hint (GTK_WINDOW (grab_widget)) != GDK_WINDOW_TYPE_HINT_UTILITY)
+    return FALSE;
+
+  toplevel = gtk_widget_get_toplevel (GTK_WIDGET (column));
+
+  return GTK_IS_WINDOW (toplevel)
+         && gtk_window_get_transient_for (GTK_WINDOW (grab_widget)) == GTK_WINDOW (toplevel);
+}
+
+static void
+thunar_miller_column_start_open_location (ThunarMillerColumn *column,
+                                          GdkEventKey        *event)
+{
+  g_object_ref (column);
+  thunar_miller_column_clear_search_active (column);
+  g_signal_emit (column,
+                 miller_column_signals[SIGNAL_START_OPEN_LOCATION],
+                 0,
+                 event->keyval == GDK_KEY_dead_tilde ? "~" : event->string);
+  g_object_unref (column);
+}
+
+static void
+thunar_miller_column_show_context_menu (ThunarMillerColumn *column)
+{
+  g_object_ref (column);
+  thunar_miller_column_clear_search_active (column);
+  g_signal_emit (column, miller_column_signals[SIGNAL_CONTEXT_MENU], 0);
+  g_object_unref (column);
+}
+
+static gboolean
+thunar_miller_column_navigate (ThunarMillerColumn *column,
+                               guint               signal_id,
+                               gboolean            cancel_search)
+{
+  gboolean handled = FALSE;
+
+  g_object_ref (column);
+  if (cancel_search)
+    thunar_miller_column_clear_search_active (column);
+  g_signal_emit (column, signal_id, 0, &handled);
+  g_object_unref (column);
+
+  return handled;
 }
 
 static void
@@ -541,28 +615,50 @@ thunar_miller_column_key_press (GtkWidget          *widget,
                                 GdkEventKey        *event,
                                 ThunarMillerColumn *column)
 {
-  GtkTreePath *cursor_path = NULL;
+  GdkModifierType modifiers;
+  GtkTreePath    *cursor_path = NULL;
+  gboolean        backwards;
+  gboolean        handled = FALSE;
+
+  modifiers = event->state & gtk_accelerator_get_default_mod_mask ();
+
+  /* Catch these before GtkTreeView starts interactive search. Shift is
+   * ignored because producing these characters requires it on some layouts. */
+  if (thunar_miller_column_event_starts_open_location (event))
+    {
+      thunar_miller_column_start_open_location (column, event);
+      return TRUE;
+    }
+
+  if (event->keyval == GDK_KEY_Menu
+      || (event->keyval == GDK_KEY_F10 && (modifiers & GDK_SHIFT_MASK) != 0))
+    {
+      thunar_miller_column_show_context_menu (column);
+      return TRUE;
+    }
 
   switch (event->keyval)
     {
     case GDK_KEY_Left:
-      g_signal_emit (column, miller_column_signals[SIGNAL_NAVIGATE_LEFT], 0);
+      thunar_miller_column_navigate (column,
+                                     miller_column_signals[SIGNAL_NAVIGATE_LEFT],
+                                     FALSE);
       return TRUE;
 
     case GDK_KEY_Right:
-      g_signal_emit (column, miller_column_signals[SIGNAL_NAVIGATE_RIGHT], 0);
+      thunar_miller_column_navigate (column,
+                                     miller_column_signals[SIGNAL_NAVIGATE_RIGHT],
+                                     FALSE);
       return TRUE;
 
     case GDK_KEY_Tab:
     case GDK_KEY_KP_Tab:
-      thunar_miller_column_clear_search_active (column);
-      g_signal_emit (column, miller_column_signals[SIGNAL_NAVIGATE_RIGHT], 0);
-      return TRUE;
-
     case GDK_KEY_ISO_Left_Tab:
-      thunar_miller_column_clear_search_active (column);
-      g_signal_emit (column, miller_column_signals[SIGNAL_NAVIGATE_LEFT], 0);
-      return TRUE;
+      backwards = event->keyval == GDK_KEY_ISO_Left_Tab || (modifiers & GDK_SHIFT_MASK) != 0;
+      handled = thunar_miller_column_navigate (column,
+                                               miller_column_signals[backwards ? SIGNAL_NAVIGATE_LEFT : SIGNAL_NAVIGATE_RIGHT],
+                                               TRUE);
+      return handled;
 
     case GDK_KEY_Up:
     case GDK_KEY_KP_Up:
@@ -601,36 +697,64 @@ thunar_miller_column_key_snooper (GtkWidget   *grab_widget,
   ThunarMillerColumn *column = THUNAR_MILLER_COLUMN (user_data);
   GdkModifierType     modifiers;
   gboolean            backwards;
+  gboolean            result = FALSE;
 
   if (event->type != GDK_KEY_PRESS)
     return FALSE;
 
-  if (!column->search_active)
+  if (!column->search_active
+      || !column->active
+      || !gtk_widget_get_mapped (GTK_WIDGET (column))
+      || !thunar_miller_column_search_owns_key_event (column, grab_widget))
     return FALSE;
+
+  /* Clearing the timeout can release its ownership of the column. Keep the
+   * object alive while this global snooper handles the event and emits any
+   * resulting navigation signal. */
+  g_object_ref (column);
+  modifiers = event->state & gtk_accelerator_get_default_mod_mask ();
+
+  if (thunar_miller_column_event_starts_open_location (event))
+    {
+      thunar_miller_column_start_open_location (column, event);
+      result = TRUE;
+      goto out;
+    }
+
+  if (event->keyval == GDK_KEY_Menu
+      || (event->keyval == GDK_KEY_F10 && (modifiers & GDK_SHIFT_MASK) != 0))
+    {
+      thunar_miller_column_show_context_menu (column);
+      result = TRUE;
+      goto out;
+    }
 
   switch (event->keyval)
     {
     case GDK_KEY_Tab:
     case GDK_KEY_KP_Tab:
     case GDK_KEY_ISO_Left_Tab:
-      modifiers = event->state & gtk_accelerator_get_default_mod_mask ();
       backwards = event->keyval == GDK_KEY_ISO_Left_Tab || (modifiers & GDK_SHIFT_MASK) != 0;
-
-      thunar_miller_column_clear_search_active (column);
-      g_signal_emit (column, miller_column_signals[backwards ? SIGNAL_NAVIGATE_LEFT : SIGNAL_NAVIGATE_RIGHT], 0);
-      return TRUE;
+      result = thunar_miller_column_navigate (column,
+                                              miller_column_signals[backwards ? SIGNAL_NAVIGATE_LEFT : SIGNAL_NAVIGATE_RIGHT],
+                                              TRUE);
+      goto out;
 
     case GDK_KEY_Escape:
     case GDK_KEY_Return:
     case GDK_KEY_KP_Enter:
       thunar_miller_column_clear_search_active (column);
-      return FALSE;
+      break;
 
     default:
       if (thunar_miller_column_event_starts_search (event))
         thunar_miller_column_note_search_active (column);
-      return FALSE;
+      break;
     }
+
+out:
+  g_object_unref (column);
+  return result;
 }
 
 static void
@@ -722,16 +846,25 @@ thunar_miller_column_class_init (ThunarMillerColumnClass *klass)
     g_signal_new ("navigate-left",
                   G_TYPE_FROM_CLASS (klass),
                   G_SIGNAL_RUN_LAST,
-                  0, NULL, NULL,
-                  g_cclosure_marshal_VOID__VOID,
-                  G_TYPE_NONE, 0);
+                  0,
+                  g_signal_accumulator_true_handled, NULL,
+                  _thunar_marshal_BOOLEAN__VOID,
+                  G_TYPE_BOOLEAN, 0);
   miller_column_signals[SIGNAL_NAVIGATE_RIGHT] =
     g_signal_new ("navigate-right",
                   G_TYPE_FROM_CLASS (klass),
                   G_SIGNAL_RUN_LAST,
+                  0,
+                  g_signal_accumulator_true_handled, NULL,
+                  _thunar_marshal_BOOLEAN__VOID,
+                  G_TYPE_BOOLEAN, 0);
+  miller_column_signals[SIGNAL_START_OPEN_LOCATION] =
+    g_signal_new ("start-open-location",
+                  G_TYPE_FROM_CLASS (klass),
+                  G_SIGNAL_RUN_LAST,
                   0, NULL, NULL,
-                  g_cclosure_marshal_VOID__VOID,
-                  G_TYPE_NONE, 0);
+                  g_cclosure_marshal_VOID__STRING,
+                  G_TYPE_NONE, 1, G_TYPE_STRING);
   miller_column_signals[SIGNAL_FOCUS_IN] =
     g_signal_new ("focus-in",
                   G_TYPE_FROM_CLASS (klass),
@@ -1090,6 +1223,109 @@ thunar_miller_column_set_selected_files (ThunarMillerColumn *column,
   thunar_miller_column_block_selection_changed (column, FALSE);
 }
 
+void
+thunar_miller_column_select_all (ThunarMillerColumn *column)
+{
+  GtkTreeSelection *selection;
+
+  _thunar_return_if_fail (THUNAR_IS_MILLER_COLUMN (column));
+
+  selection = gtk_tree_view_get_selection (GTK_TREE_VIEW (column->tree_view));
+  gtk_tree_selection_select_all (selection);
+}
+
+void
+thunar_miller_column_select_by_pattern (ThunarMillerColumn *column,
+                                        const gchar        *pattern,
+                                        gboolean            case_sensitive,
+                                        gboolean            match_diacritics)
+{
+  GtkTreeSelection *selection;
+  GList            *paths = NULL;
+  GList            *lp;
+
+  _thunar_return_if_fail (THUNAR_IS_MILLER_COLUMN (column));
+  _thunar_return_if_fail (pattern != NULL);
+
+  selection = gtk_tree_view_get_selection (GTK_TREE_VIEW (column->tree_view));
+  if (column->model != NULL)
+    paths = thunar_tree_view_model_get_paths_for_pattern (column->model,
+                                                          pattern,
+                                                          case_sensitive,
+                                                          match_diacritics);
+
+  thunar_miller_column_block_selection_changed (column, TRUE);
+  gtk_tree_selection_unselect_all (selection);
+
+  if (paths != NULL)
+    {
+      gtk_tree_view_set_cursor (GTK_TREE_VIEW (column->tree_view),
+                                g_list_last (paths)->data,
+                                NULL,
+                                FALSE);
+      gtk_tree_view_scroll_to_cell (GTK_TREE_VIEW (column->tree_view),
+                                    g_list_last (paths)->data,
+                                    NULL,
+                                    TRUE,
+                                    0.5f,
+                                    0.0f);
+    }
+
+  for (lp = paths; lp != NULL; lp = lp->next)
+    gtk_tree_selection_select_path (selection, lp->data);
+
+  g_list_free_full (paths, (GDestroyNotify) gtk_tree_path_free);
+  thunar_miller_column_block_selection_changed (column, FALSE);
+  thunar_miller_column_selection_changed (selection, column);
+}
+
+static void
+thunar_miller_column_collect_selected_path (GtkTreeModel *model,
+                                            GtkTreePath  *path,
+                                            GtkTreeIter  *iter,
+                                            gpointer      user_data)
+{
+  GList **paths = user_data;
+
+  *paths = g_list_prepend (*paths, gtk_tree_path_copy (path));
+}
+
+void
+thunar_miller_column_selection_invert (ThunarMillerColumn *column)
+{
+  GtkTreeSelection *selection;
+  GList            *selected_paths = NULL;
+  GList            *lp;
+
+  _thunar_return_if_fail (THUNAR_IS_MILLER_COLUMN (column));
+
+  selection = gtk_tree_view_get_selection (GTK_TREE_VIEW (column->tree_view));
+  gtk_tree_selection_selected_foreach (selection,
+                                       thunar_miller_column_collect_selected_path,
+                                       &selected_paths);
+
+  thunar_miller_column_block_selection_changed (column, TRUE);
+  gtk_tree_selection_select_all (selection);
+
+  for (lp = selected_paths; lp != NULL; lp = lp->next)
+    gtk_tree_selection_unselect_path (selection, lp->data);
+
+  g_list_free_full (selected_paths, (GDestroyNotify) gtk_tree_path_free);
+  thunar_miller_column_block_selection_changed (column, FALSE);
+  thunar_miller_column_selection_changed (selection, column);
+}
+
+void
+thunar_miller_column_unselect_all (ThunarMillerColumn *column)
+{
+  GtkTreeSelection *selection;
+
+  _thunar_return_if_fail (THUNAR_IS_MILLER_COLUMN (column));
+
+  selection = gtk_tree_view_get_selection (GTK_TREE_VIEW (column->tree_view));
+  gtk_tree_selection_unselect_all (selection);
+}
+
 gboolean
 thunar_miller_column_get_show_hidden (ThunarMillerColumn *column)
 {
@@ -1129,6 +1365,13 @@ thunar_miller_column_grab_focus (ThunarMillerColumn *column)
 }
 
 void
+thunar_miller_column_cancel_search (ThunarMillerColumn *column)
+{
+  _thunar_return_if_fail (THUNAR_IS_MILLER_COLUMN (column));
+  thunar_miller_column_clear_search_active (column);
+}
+
+void
 thunar_miller_column_set_active (ThunarMillerColumn *column,
                                  gboolean            active)
 {
@@ -1138,6 +1381,8 @@ thunar_miller_column_set_active (ThunarMillerColumn *column,
     return;
 
   column->active = active;
+  if (!active)
+    thunar_miller_column_clear_search_active (column);
 
   g_object_notify (G_OBJECT (column), "active");
 }

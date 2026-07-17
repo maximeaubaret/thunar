@@ -8,6 +8,14 @@
  * any later version.
  */
 
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+
+#ifdef HAVE_STRING_H
+#include <string.h>
+#endif
+
 #include "thunar/thunar-miller-columns-view.h"
 
 #include "thunar/thunar-action-manager.h"
@@ -38,7 +46,19 @@ static void thunar_miller_columns_view_view_init (ThunarViewIface *iface);
 static void thunar_miller_columns_view_grab_focus (GtkWidget *widget);
 static void thunar_miller_columns_view_connect_column (ThunarMillerColumnsView *view,
                                                        GtkWidget               *column_widget);
-static void thunar_miller_columns_view_sync_action_directory (ThunarMillerColumnsView *view);
+static void thunar_miller_columns_view_sync_action_state (ThunarMillerColumnsView *view);
+static void thunar_miller_columns_view_connect_accelerators (ThunarMillerColumnsView *view);
+static void thunar_miller_columns_view_disconnect_accelerators (ThunarMillerColumnsView *view);
+static gboolean thunar_miller_columns_view_tree_button_press (GtkWidget               *tree_view,
+                                                              GdkEventButton          *event,
+                                                              ThunarMillerColumnsView *view);
+static gboolean thunar_miller_columns_view_tree_button_release (GtkWidget               *tree_view,
+                                                                GdkEventButton          *event,
+                                                                ThunarMillerColumnsView *view);
+static gboolean thunar_miller_columns_view_action_select_all_files (ThunarMillerColumnsView *view);
+static gboolean thunar_miller_columns_view_action_select_by_pattern (ThunarMillerColumnsView *view);
+static gboolean thunar_miller_columns_view_action_invert_selection (ThunarMillerColumnsView *view);
+static gboolean thunar_miller_columns_view_action_unselect_all_files (ThunarMillerColumnsView *view);
 static gboolean thunar_miller_columns_view_action_sort_by_name (ThunarMillerColumnsView *view);
 static gboolean thunar_miller_columns_view_action_sort_by_size (ThunarMillerColumnsView *view);
 static gboolean thunar_miller_columns_view_action_sort_by_type (ThunarMillerColumnsView *view);
@@ -96,20 +116,6 @@ enum
 
 enum
 {
-  THUNAR_MILLER_COLUMNS_VIEW_ACTION_ARRANGE_ITEMS_MENU,
-  THUNAR_MILLER_COLUMNS_VIEW_ACTION_SORT_BY_NAME,
-  THUNAR_MILLER_COLUMNS_VIEW_ACTION_SORT_BY_SIZE,
-  THUNAR_MILLER_COLUMNS_VIEW_ACTION_SORT_BY_TYPE,
-  THUNAR_MILLER_COLUMNS_VIEW_ACTION_SORT_BY_MTIME,
-  THUNAR_MILLER_COLUMNS_VIEW_ACTION_SORT_BY_DTIME,
-  THUNAR_MILLER_COLUMNS_VIEW_ACTION_SORT_ASCENDING,
-  THUNAR_MILLER_COLUMNS_VIEW_ACTION_SORT_DESCENDING,
-  THUNAR_MILLER_COLUMNS_VIEW_ACTION_SORT_ORDER_TOGGLE,
-  THUNAR_MILLER_COLUMNS_VIEW_ACTION_SORT_FOLDERS_FIRST,
-};
-
-enum
-{
   TARGET_TEXT_URI_LIST,
 };
 
@@ -127,6 +133,10 @@ static const GtkTargetEntry drop_targets[] =
 
 static XfceGtkActionEntry miller_columns_view_action_entries[] =
 {
+  { THUNAR_MILLER_COLUMNS_VIEW_ACTION_SELECT_ALL_FILES, "<Actions>/ThunarMillerColumnsView/select-all-files", "<Primary>a", XFCE_GTK_MENU_ITEM, N_ ("Select _all Files"), N_ ("Select all files in this window"), NULL, G_CALLBACK (thunar_miller_columns_view_action_select_all_files), },
+  { THUNAR_MILLER_COLUMNS_VIEW_ACTION_SELECT_BY_PATTERN, "<Actions>/ThunarMillerColumnsView/select-by-pattern", "<Primary>s", XFCE_GTK_MENU_ITEM, N_ ("Select _by Pattern..."), N_ ("Select all files that match a certain pattern"), NULL, G_CALLBACK (thunar_miller_columns_view_action_select_by_pattern), },
+  { THUNAR_MILLER_COLUMNS_VIEW_ACTION_INVERT_SELECTION, "<Actions>/ThunarMillerColumnsView/invert-selection", "<Primary><shift>I", XFCE_GTK_MENU_ITEM, N_ ("_Invert Selection"), N_ ("Select all files but not those currently selected"), NULL, G_CALLBACK (thunar_miller_columns_view_action_invert_selection), },
+  { THUNAR_MILLER_COLUMNS_VIEW_ACTION_UNSELECT_ALL_FILES, "<Actions>/ThunarMillerColumnsView/unselect-all-files", "Escape", XFCE_GTK_MENU_ITEM, N_ ("U_nselect all Files"), N_ ("Unselect all files in this window"), NULL, G_CALLBACK (thunar_miller_columns_view_action_unselect_all_files), },
   { THUNAR_MILLER_COLUMNS_VIEW_ACTION_ARRANGE_ITEMS_MENU, "<Actions>/ThunarMillerColumnsView/arrange-items-menu", "", XFCE_GTK_MENU_ITEM, N_ ("Arran_ge Items"), NULL, NULL, G_CALLBACK (NULL), },
   { THUNAR_MILLER_COLUMNS_VIEW_ACTION_SORT_BY_NAME, "<Actions>/ThunarMillerColumnsView/sort-by-name", "", XFCE_GTK_RADIO_MENU_ITEM, N_ ("By _Name"), N_ ("Keep items sorted by their name"), NULL, G_CALLBACK (thunar_miller_columns_view_action_sort_by_name), },
   { THUNAR_MILLER_COLUMNS_VIEW_ACTION_SORT_BY_SIZE, "<Actions>/ThunarMillerColumnsView/sort-by-size", "", XFCE_GTK_RADIO_MENU_ITEM, N_ ("By _Size"), N_ ("Keep items sorted by their size"), NULL, G_CALLBACK (thunar_miller_columns_view_action_sort_by_size), },
@@ -265,6 +275,215 @@ thunar_miller_columns_view_set_sort_order (ThunarMillerColumnsView *view,
   thunar_miller_columns_view_apply_sorting (view);
   thunar_miller_columns_view_store_sorting (view);
   g_object_notify (G_OBJECT (view), "sort-order");
+}
+
+static ThunarMillerColumn *
+thunar_miller_columns_view_get_active_column (ThunarMillerColumnsView *view)
+{
+  _thunar_return_val_if_fail (THUNAR_IS_MILLER_COLUMNS_VIEW (view), NULL);
+
+  return g_list_nth_data (view->columns, view->active_column_index);
+}
+
+static void
+thunar_miller_columns_view_connect_accelerators (ThunarMillerColumnsView *view)
+{
+  if (view->accel_group == NULL)
+    return;
+
+  xfce_gtk_accel_map_add_entries (miller_columns_view_action_entries,
+                                  G_N_ELEMENTS (miller_columns_view_action_entries));
+  xfce_gtk_accel_group_connect_action_entries (view->accel_group,
+                                               miller_columns_view_action_entries,
+                                               G_N_ELEMENTS (miller_columns_view_action_entries),
+                                               view);
+}
+
+static void
+thunar_miller_columns_view_disconnect_accelerators (ThunarMillerColumnsView *view)
+{
+  if (view->accel_group == NULL)
+    return;
+
+  xfce_gtk_accel_group_disconnect_action_entries (view->accel_group,
+                                                  miller_columns_view_action_entries,
+                                                  G_N_ELEMENTS (miller_columns_view_action_entries));
+  g_object_unref (view->accel_group);
+  view->accel_group = NULL;
+}
+
+static void
+thunar_miller_columns_view_focus_column (ThunarMillerColumn *column)
+{
+  GtkWidget *tree_view;
+
+  tree_view = thunar_miller_column_get_tree_view (column);
+  gtk_widget_grab_focus (tree_view);
+}
+
+static gboolean
+thunar_miller_columns_view_action_select_all_files (ThunarMillerColumnsView *view)
+{
+  ThunarMillerColumn *column;
+
+  _thunar_return_val_if_fail (THUNAR_IS_MILLER_COLUMNS_VIEW (view), FALSE);
+
+  column = thunar_miller_columns_view_get_active_column (view);
+  if (column != NULL)
+    {
+      thunar_miller_columns_view_focus_column (column);
+      thunar_miller_column_select_all (column);
+    }
+
+  return TRUE;
+}
+
+static gboolean
+thunar_miller_columns_view_action_select_by_pattern (ThunarMillerColumnsView *view)
+{
+  ThunarMillerColumn *column;
+  GtkWidget          *window;
+  GtkWidget          *dialog;
+  GtkBox             *content_area;
+  GtkGrid            *grid;
+  GtkWidget          *label;
+  GtkWidget          *entry;
+  GtkWidget          *info_image;
+  GtkWidget          *case_sensitive_button;
+  GtkWidget          *match_diacritics_button;
+  gint                response;
+  const gchar        *pattern;
+  gchar              *pattern_extended = NULL;
+  gboolean            case_sensitive;
+  gboolean            match_diacritics;
+  gint                row = 0;
+
+  _thunar_return_val_if_fail (THUNAR_IS_MILLER_COLUMNS_VIEW (view), FALSE);
+
+  column = thunar_miller_columns_view_get_active_column (view);
+  if (column == NULL)
+    return TRUE;
+  g_object_ref (column);
+
+  window = gtk_widget_get_toplevel (GTK_WIDGET (view));
+  /* TRANSLATORS: Dialog allowing selection by wildcard ("*.c", etc.) */
+  dialog = gtk_dialog_new_with_buttons (C_ ("Select by Pattern dialog: title",
+                                            "Select by Pattern"),
+                                        GTK_WINDOW (window),
+                                        GTK_DIALOG_MODAL
+                                        | GTK_DIALOG_DESTROY_WITH_PARENT,
+                                        C_ ("Select by Pattern dialog: buttons",
+                                            "_Cancel"),
+                                        GTK_RESPONSE_CANCEL,
+                                        C_ ("Select by Pattern dialog: buttons",
+                                            "_Select"),
+                                        GTK_RESPONSE_OK,
+                                        NULL);
+  gtk_dialog_set_default_response (GTK_DIALOG (dialog), GTK_RESPONSE_OK);
+  gtk_window_set_default_size (GTK_WINDOW (dialog), 290, -1);
+
+  content_area = GTK_BOX (gtk_dialog_get_content_area (GTK_DIALOG (dialog)));
+  gtk_container_set_border_width (GTK_CONTAINER (content_area), 6);
+
+  grid = GTK_GRID (gtk_grid_new ());
+  g_object_set (G_OBJECT (grid), "column-spacing", 10, "row-spacing", 10, NULL);
+  gtk_box_pack_start (content_area, GTK_WIDGET (grid), TRUE, TRUE, 10);
+  gtk_widget_show (GTK_WIDGET (grid));
+
+  label = gtk_label_new_with_mnemonic (C_ ("Select by Pattern dialog: labels: pattern entry textbox", "_Pattern:"));
+  gtk_widget_set_tooltip_text (GTK_WIDGET (label), C_ ("Select by Pattern dialog: tooltips on label for pattern entry textbox", "Files whose name matches the wildcard pattern you enter will be selected in the main window."));
+  gtk_grid_attach (grid, label, 0, row, 1, 1);
+  gtk_widget_show (label);
+
+  entry = gtk_entry_new ();
+  gtk_entry_set_activates_default (GTK_ENTRY (entry), TRUE);
+  gtk_entry_set_width_chars (GTK_ENTRY (entry), 25);
+  gtk_grid_attach_next_to (grid, entry, label, GTK_POS_RIGHT, 1, 1);
+  gtk_widget_set_hexpand (entry, TRUE);
+  gtk_label_set_mnemonic_widget (GTK_LABEL (label), entry);
+  gtk_widget_show (entry);
+
+  info_image = gtk_image_new_from_icon_name ("dialog-information", GTK_ICON_SIZE_MENU);
+  /* TRANSLATORS: the * and ? characters are the ASCII wildcard special symbols, and they must not be localized. */
+  gtk_widget_set_tooltip_text (GTK_WIDGET (info_image), C_ ("Select by Pattern dialog: tooltips: pattern entry text box", "? matches exactly one character,\n* matches any number of characters, including zero.\n\nFor example: *.txt, file??.png, pict\n\nWithout any * or ? wildcards, the pattern will match anywhere in a name. With wildcards, the pattern must match at both the start and the end of a name."));
+  gtk_grid_attach_next_to (grid, info_image, entry, GTK_POS_RIGHT, 1, 1);
+  gtk_widget_show (info_image);
+
+  case_sensitive_button = gtk_check_button_new_with_mnemonic (C_ ("Select by Pattern dialog: labels: case sensitive checkbox", "C_ase sensitive"));
+  gtk_widget_set_tooltip_text (GTK_WIDGET (case_sensitive_button), C_ ("Select by Pattern dialog: tooltips: case sensitive checkbox", "If enabled, letter case must match the pattern.\nExamp* would match Example.txt and not example.txt"));
+  gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (case_sensitive_button), FALSE);
+  gtk_grid_attach_next_to (grid, case_sensitive_button, entry, GTK_POS_BOTTOM, 1, 1);
+  gtk_widget_show (case_sensitive_button);
+
+  match_diacritics_button = gtk_check_button_new_with_mnemonic (C_ ("Select by Pattern dialog: labels: match diacritics checkbox", "_Match diacritics"));
+  gtk_widget_set_tooltip_text (GTK_WIDGET (match_diacritics_button), C_ ("Select by Pattern dialog: tooltips: match diacritics checkbox", "If enabled, require accents to match the pattern.\nRés* would match Résumé.txt and not Resume.txt"));
+  gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (match_diacritics_button), FALSE);
+  gtk_grid_attach_next_to (grid, match_diacritics_button, case_sensitive_button, GTK_POS_BOTTOM, 1, 1);
+  gtk_widget_show (match_diacritics_button);
+
+  response = gtk_dialog_run (GTK_DIALOG (dialog));
+  if (response == GTK_RESPONSE_OK)
+    {
+      pattern = gtk_entry_get_text (GTK_ENTRY (entry));
+      if (pattern != NULL
+          && strchr (pattern, '*') == NULL
+          && strchr (pattern, '?') == NULL)
+        {
+          pattern_extended = g_strdup_printf ("*%s*", pattern);
+          pattern = pattern_extended;
+        }
+
+      case_sensitive = gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (case_sensitive_button));
+      match_diacritics = gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (match_diacritics_button));
+
+      if (g_list_find (view->columns, column) != NULL)
+        {
+          thunar_miller_columns_view_focus_column (column);
+          thunar_miller_column_select_by_pattern (column,
+                                                  pattern,
+                                                  case_sensitive,
+                                                  match_diacritics);
+        }
+      g_free (pattern_extended);
+    }
+
+  gtk_widget_destroy (dialog);
+  g_object_unref (column);
+  return TRUE;
+}
+
+static gboolean
+thunar_miller_columns_view_action_invert_selection (ThunarMillerColumnsView *view)
+{
+  ThunarMillerColumn *column;
+
+  _thunar_return_val_if_fail (THUNAR_IS_MILLER_COLUMNS_VIEW (view), FALSE);
+
+  column = thunar_miller_columns_view_get_active_column (view);
+  if (column != NULL)
+    {
+      thunar_miller_columns_view_focus_column (column);
+      thunar_miller_column_selection_invert (column);
+    }
+
+  return TRUE;
+}
+
+static gboolean
+thunar_miller_columns_view_action_unselect_all_files (ThunarMillerColumnsView *view)
+{
+  ThunarMillerColumn *column;
+
+  _thunar_return_val_if_fail (THUNAR_IS_MILLER_COLUMNS_VIEW (view), FALSE);
+
+  column = thunar_miller_columns_view_get_active_column (view);
+  if (column != NULL)
+    {
+      thunar_miller_columns_view_focus_column (column);
+      thunar_miller_column_unselect_all (column);
+    }
+
+  return TRUE;
 }
 
 static gboolean
@@ -419,12 +638,10 @@ thunar_miller_columns_view_set_active_column (ThunarMillerColumnsView *view,
   for (lp = view->columns, i = 0; lp != NULL; lp = lp->next, ++i)
     {
       thunar_miller_column_set_active (THUNAR_MILLER_COLUMN (lp->data),
-                                       i == active_column_index && grab_focus);
+                                       i == active_column_index);
       if (i != active_column_index)
         thunar_miller_column_set_selected_file (THUNAR_MILLER_COLUMN (lp->data), NULL);
     }
-
-  thunar_miller_columns_view_sync_action_directory (view);
 
   if (grab_focus)
     {
@@ -454,6 +671,8 @@ thunar_miller_columns_view_set_active_column (ThunarMillerColumnsView *view,
           thunar_miller_column_grab_focus (active_column);
         }
     }
+
+  thunar_miller_columns_view_sync_action_state (view);
 }
 
 static void
@@ -473,7 +692,7 @@ thunar_miller_columns_view_grab_focus (GtkWidget *widget)
 }
 
 static void
-thunar_miller_columns_view_sync_action_directory (ThunarMillerColumnsView *view)
+thunar_miller_columns_view_sync_action_state (ThunarMillerColumnsView *view)
 {
   ThunarActionManager *action_mgr;
   ThunarMillerColumn  *active_column;
@@ -482,18 +701,22 @@ thunar_miller_columns_view_sync_action_directory (ThunarMillerColumnsView *view)
 
   active_column = g_list_nth_data (view->columns, view->active_column_index);
   if (active_column == NULL)
-    return;
+    {
+      g_object_notify (G_OBJECT (view), "selected-files");
+      return;
+    }
 
   directory = thunar_miller_column_get_directory (active_column);
-  if (directory == NULL)
-    return;
-
   window = gtk_widget_get_toplevel (GTK_WIDGET (view));
-  if (!THUNAR_IS_WINDOW (window))
-    return;
+  if (directory != NULL && THUNAR_IS_WINDOW (window))
+    {
+      action_mgr = thunar_window_get_action_manager (THUNAR_WINDOW (window));
+      thunar_navigator_set_current_directory (THUNAR_NAVIGATOR (action_mgr), directory, FALSE);
+    }
 
-  action_mgr = thunar_window_get_action_manager (THUNAR_WINDOW (window));
-  thunar_navigator_set_current_directory (THUNAR_NAVIGATOR (action_mgr), directory, FALSE);
+  /* The selected-files binding updates the same action manager synchronously,
+   * and also keeps the side pane in step with the active column. */
+  g_object_notify (G_OBJECT (view), "selected-files");
 }
 
 static ThunarMillerColumn *
@@ -1138,6 +1361,7 @@ thunar_miller_columns_view_clear_columns (ThunarMillerColumnsView *view)
     {
       GtkWidget *wrapper;
 
+      thunar_miller_column_cancel_search (THUNAR_MILLER_COLUMN (lp->data));
       g_signal_handlers_disconnect_by_data (lp->data, view);
       wrapper = thunar_miller_columns_view_get_column_wrapper (GTK_WIDGET (lp->data));
       gtk_container_remove (GTK_CONTAINER (view->columns_box),
@@ -1171,6 +1395,7 @@ thunar_miller_columns_view_remove_columns_after (ThunarMillerColumnsView *view,
     {
       GtkWidget *wrapper;
 
+      thunar_miller_column_cancel_search (THUNAR_MILLER_COLUMN (lp->data));
       g_signal_handlers_disconnect_by_data (lp->data, view);
       wrapper = thunar_miller_columns_view_get_column_wrapper (GTK_WIDGET (lp->data));
       gtk_container_remove (GTK_CONTAINER (view->columns_box),
@@ -1266,9 +1491,17 @@ thunar_miller_columns_view_column_file_activated (ThunarMillerColumn      *colum
   GtkWidget           *window;
   gint                 column_index;
 
+  column_index = g_list_index (view->columns, column);
+  if (column_index < 0)
+    return;
+
+  if (column_index != view->active_column_index)
+    thunar_miller_columns_view_set_active_column (view, column_index, FALSE);
+  else
+    thunar_miller_columns_view_sync_action_state (view);
+
   if (thunar_file_is_directory (file))
     {
-      column_index = g_list_index (view->columns, column);
       thunar_miller_columns_view_queue_directory_change (view, file, column_index, TRUE, -1);
       return;
     }
@@ -1285,6 +1518,16 @@ thunar_miller_columns_view_column_context_menu (ThunarMillerColumn      *column,
   GtkWidget  *window;
   ThunarMenu *menu;
   GList      *selected_files;
+  gint        column_index;
+
+  column_index = g_list_index (view->columns, column);
+  if (column_index < 0)
+    return;
+
+  if (column_index != view->active_column_index)
+    thunar_miller_columns_view_set_active_column (view, column_index, FALSE);
+  else
+    thunar_miller_columns_view_sync_action_state (view);
 
   window = gtk_widget_get_toplevel (GTK_WIDGET (view));
   selected_files = thunar_view_get_selected_files (THUNAR_VIEW (view));
@@ -1327,7 +1570,7 @@ thunar_miller_columns_view_column_context_menu (ThunarMillerColumn      *column,
   g_list_free_full (selected_files, g_object_unref);
 }
 
-static void
+static gboolean
 thunar_miller_columns_view_column_navigate_left (ThunarMillerColumn      *column,
                                                  ThunarMillerColumnsView *view)
 {
@@ -1335,37 +1578,103 @@ thunar_miller_columns_view_column_navigate_left (ThunarMillerColumn      *column
 
   previous_index = g_list_index (view->columns, column) - 1;
   if (previous_index < 0)
-    return;
+    return FALSE;
 
   thunar_miller_columns_view_set_active_column (view, previous_index, TRUE);
   thunar_miller_columns_view_scroll_to_active_column (view);
   thunar_miller_columns_view_update_statusbar_text_internal (view);
+
+  return TRUE;
 }
 
-static void
+static ThunarFile *
+thunar_miller_columns_view_get_single_selected_file (ThunarMillerColumn *column)
+{
+  GList      *selected_files;
+  ThunarFile *selected_file = NULL;
+
+  selected_files = thunar_miller_column_get_selected_files (column);
+  if (selected_files != NULL && selected_files->next == NULL)
+    {
+      selected_file = selected_files->data;
+      g_list_free (selected_files);
+    }
+  else
+    {
+      g_list_free_full (selected_files, g_object_unref);
+    }
+
+  return selected_file;
+}
+
+static gboolean
 thunar_miller_columns_view_column_navigate_right (ThunarMillerColumn      *column,
                                                   ThunarMillerColumnsView *view)
 {
   gint        column_index;
   GtkWidget  *next_column;
+  ThunarFile *next_directory = NULL;
   ThunarFile *selected_file = NULL;
 
   column_index = g_list_index (view->columns, column);
-  next_column = g_list_nth_data (view->columns, column_index + 1);
+  if (column_index < 0)
+    return FALSE;
 
+  selected_file = thunar_miller_columns_view_get_single_selected_file (column);
+  if (selected_file == NULL || !thunar_file_is_directory (selected_file))
+    {
+      if (selected_file != NULL)
+        g_object_unref (selected_file);
+      return FALSE;
+    }
+
+  next_column = g_list_nth_data (view->columns, column_index + 1);
   if (next_column != NULL)
+    next_directory = thunar_miller_column_get_directory (THUNAR_MILLER_COLUMN (next_column));
+
+  if (next_directory == selected_file)
     {
       thunar_miller_columns_view_set_active_column (view, column_index + 1, TRUE);
       thunar_miller_columns_view_scroll_to_active_column (view);
       thunar_miller_columns_view_update_statusbar_text_internal (view);
-      return;
+    }
+  else
+    {
+      if (next_column != NULL)
+        {
+          thunar_miller_columns_view_remove_columns_after (view, column_index);
+          thunar_miller_columns_view_update_opened_files (view);
+          thunar_miller_columns_view_update_loading (view);
+        }
+
+      if (selected_file == view->current_directory)
+        {
+          thunar_miller_columns_view_append_column (view, selected_file);
+          thunar_miller_columns_view_update_opened_files (view);
+          thunar_miller_columns_view_update_loading (view);
+          thunar_miller_columns_view_set_active_column (view, column_index + 1, TRUE);
+          thunar_miller_columns_view_scroll_to_active_column (view);
+          thunar_miller_columns_view_update_statusbar_text_internal (view);
+        }
+      else
+        {
+          thunar_miller_columns_view_queue_directory_change (view, selected_file, column_index, TRUE, column_index + 1);
+        }
     }
 
-  selected_file = thunar_miller_column_get_selected_file (column);
-  if (selected_file != NULL && thunar_file_is_directory (selected_file))
-    thunar_miller_columns_view_queue_directory_change (view, selected_file, column_index, TRUE, column_index + 1);
-  if (selected_file != NULL)
-    g_object_unref (selected_file);
+  g_object_unref (selected_file);
+  return TRUE;
+}
+
+static void
+thunar_miller_columns_view_column_start_open_location (ThunarMillerColumn      *column,
+                                                       const gchar             *initial_text,
+                                                       ThunarMillerColumnsView *view)
+{
+  g_signal_emit (view,
+                 miller_columns_view_signals[START_OPEN_LOCATION],
+                 0,
+                 initial_text);
 }
 
 static void
@@ -1379,7 +1688,6 @@ thunar_miller_columns_view_column_focus_in (ThunarMillerColumn      *column,
     return;
 
   thunar_miller_columns_view_set_active_column (view, column_index, FALSE);
-  g_object_notify (G_OBJECT (view), "selected-files");
   thunar_miller_columns_view_update_statusbar_text_internal (view);
 }
 
@@ -1388,7 +1696,8 @@ thunar_miller_columns_view_column_selection_changed (ThunarMillerColumn      *co
                                                      ThunarMillerColumnsView *view)
 {
   ThunarFile *next_directory = NULL;
-  ThunarFile *selected_file;
+  ThunarFile *selected_file = NULL;
+  ThunarFile *source_directory;
   GtkWidget  *next_column;
   gint        column_index;
 
@@ -1401,23 +1710,129 @@ thunar_miller_columns_view_column_selection_changed (ThunarMillerColumn      *co
 
   thunar_miller_columns_view_set_active_column (view, column_index, FALSE);
 
-  selected_file = thunar_miller_column_get_selected_file (column);
+  selected_file = thunar_miller_columns_view_get_single_selected_file (column);
+  source_directory = thunar_miller_column_get_directory (column);
+  next_column = g_list_nth_data (view->columns, column_index + 1);
+  if (next_column != NULL)
+    next_directory = thunar_miller_column_get_directory (THUNAR_MILLER_COLUMN (next_column));
+
+  thunar_miller_columns_view_cancel_pending_directory_change (view);
 
   if (selected_file != NULL && thunar_file_is_directory (selected_file))
     {
-      next_column = g_list_nth_data (view->columns, column_index + 1);
-      if (next_column != NULL)
-        next_directory = thunar_miller_column_get_directory (THUNAR_MILLER_COLUMN (next_column));
+      if (next_directory != selected_file)
+        {
+          if (next_column != NULL)
+            thunar_miller_columns_view_remove_columns_after (view, column_index);
 
-      if (selected_file != view->current_directory && selected_file != next_directory)
-        thunar_miller_columns_view_queue_directory_change (view, selected_file, column_index, TRUE, -1);
+          if (selected_file == view->current_directory)
+            thunar_miller_columns_view_append_column (view, selected_file);
+          else
+            thunar_miller_columns_view_queue_directory_change (view, selected_file, column_index, TRUE, -1);
+
+          thunar_miller_columns_view_update_opened_files (view);
+          thunar_miller_columns_view_update_loading (view);
+        }
+    }
+  else
+    {
+      if (next_column != NULL)
+        {
+          thunar_miller_columns_view_remove_columns_after (view, column_index);
+          thunar_miller_columns_view_update_opened_files (view);
+          thunar_miller_columns_view_update_loading (view);
+        }
+
+      if (source_directory != NULL && source_directory != view->current_directory)
+        thunar_miller_columns_view_queue_directory_change (view, source_directory, column_index, FALSE, -1);
     }
 
   if (selected_file != NULL)
     g_object_unref (selected_file);
 
-  g_object_notify (G_OBJECT (view), "selected-files");
   thunar_miller_columns_view_update_statusbar_text_internal (view);
+}
+
+static gboolean
+thunar_miller_columns_view_tree_button_press (GtkWidget               *tree_view,
+                                              GdkEventButton          *event,
+                                              ThunarMillerColumnsView *view)
+{
+  ThunarActionManager *action_mgr;
+  ThunarFile          *file = NULL;
+  GtkTreeIter          iter;
+  GtkTreeModel        *model;
+  GtkTreePath         *path = NULL;
+  GtkWidget           *window;
+  GList                middle_clicked_file = { NULL, NULL, NULL };
+  GList               *selected_files;
+  gboolean             in_tab;
+  guint                single_click_timeout;
+
+  if (event->button != 2)
+    return FALSE;
+
+  /* A middle click is a direct open action; do not let GtkTreeView alter the
+   * cursor or the current selection while handling it. */
+  if (event->type != GDK_BUTTON_PRESS)
+    return TRUE;
+
+  /* Consuming this event bypasses XfceTreeView's default press handler, so
+   * explicitly cancel a pending hover-selection timeout. */
+  single_click_timeout = xfce_tree_view_get_single_click_timeout (XFCE_TREE_VIEW (tree_view));
+  if (single_click_timeout > 0)
+    {
+      xfce_tree_view_set_single_click_timeout (XFCE_TREE_VIEW (tree_view), 0);
+      xfce_tree_view_set_single_click_timeout (XFCE_TREE_VIEW (tree_view), single_click_timeout);
+    }
+
+  if (!gtk_tree_view_get_path_at_pos (GTK_TREE_VIEW (tree_view),
+                                      (gint) event->x,
+                                      (gint) event->y,
+                                      &path, NULL, NULL, NULL))
+    return TRUE;
+
+  model = gtk_tree_view_get_model (GTK_TREE_VIEW (tree_view));
+  if (model != NULL && gtk_tree_model_get_iter (model, &iter, path))
+    file = thunar_tree_view_model_get_file (THUNAR_TREE_VIEW_MODEL (model), &iter);
+  gtk_tree_path_free (path);
+
+  if (file == NULL)
+    return TRUE;
+
+  if (thunar_file_is_directory (file))
+    {
+      window = gtk_widget_get_toplevel (GTK_WIDGET (view));
+      if (THUNAR_IS_WINDOW (window))
+        {
+          g_object_get (view->preferences, "misc-middle-click-in-tab", &in_tab, NULL);
+
+          /* Holding Control reverses the configured tab/window action. */
+          if ((event->state & GDK_CONTROL_MASK) != 0)
+            in_tab = !in_tab;
+
+          action_mgr = thunar_window_get_action_manager (THUNAR_WINDOW (window));
+          selected_files = thunar_view_get_selected_files (THUNAR_VIEW (view));
+          middle_clicked_file.data = file;
+          thunar_action_manager_set_selection (action_mgr, &middle_clicked_file, NULL, NULL);
+          thunar_action_manager_open_selected_folders (action_mgr, in_tab);
+          thunar_action_manager_set_selection (action_mgr, selected_files, NULL, NULL);
+          g_list_free_full (selected_files, g_object_unref);
+        }
+    }
+
+  g_object_unref (file);
+  return TRUE;
+}
+
+static gboolean
+thunar_miller_columns_view_tree_button_release (GtkWidget               *tree_view,
+                                                GdkEventButton          *event,
+                                                ThunarMillerColumnsView *view)
+{
+  /* XfceTreeView normally collapses an existing multiple selection on
+   * button release. The middle-click action must leave it untouched. */
+  return event->button == 2;
 }
 
 static void
@@ -1436,6 +1851,8 @@ thunar_miller_columns_view_connect_column (ThunarMillerColumnsView *view,
                     G_CALLBACK (thunar_miller_columns_view_column_navigate_left), view);
   g_signal_connect (column_widget, "navigate-right",
                     G_CALLBACK (thunar_miller_columns_view_column_navigate_right), view);
+  g_signal_connect (column_widget, "start-open-location",
+                    G_CALLBACK (thunar_miller_columns_view_column_start_open_location), view);
   g_signal_connect (column_widget, "focus-in",
                     G_CALLBACK (thunar_miller_columns_view_column_focus_in), view);
   g_signal_connect (column_widget, "notify::loading",
@@ -1443,6 +1860,16 @@ thunar_miller_columns_view_connect_column (ThunarMillerColumnsView *view,
 
   tree_view = thunar_miller_column_get_tree_view (THUNAR_MILLER_COLUMN (column_widget));
   g_object_set_data (G_OBJECT (tree_view), "thunar-miller-column", column_widget);
+  g_object_bind_property (view->preferences, "misc-single-click",
+                          tree_view, "single-click",
+                          G_BINDING_SYNC_CREATE);
+  g_object_bind_property (view->preferences, "misc-single-click-timeout",
+                          tree_view, "single-click-timeout",
+                          G_BINDING_SYNC_CREATE);
+  g_signal_connect (G_OBJECT (tree_view), "button-press-event",
+                    G_CALLBACK (thunar_miller_columns_view_tree_button_press), view);
+  g_signal_connect (G_OBJECT (tree_view), "button-release-event",
+                    G_CALLBACK (thunar_miller_columns_view_tree_button_release), view);
 
   gtk_drag_dest_set (tree_view, 0, drop_targets, G_N_ELEMENTS (drop_targets),
                      GDK_ACTION_ASK | GDK_ACTION_COPY | GDK_ACTION_LINK | GDK_ACTION_MOVE);
@@ -1527,8 +1954,7 @@ thunar_miller_columns_view_finalize (GObject *object)
   g_clear_object (&view->pending_directory);
   thunar_g_list_free_full (view->drag_g_file_list);
   thunar_g_list_free_full (view->drop_file_list);
-  if (view->accel_group != NULL)
-    g_object_unref (view->accel_group);
+  thunar_miller_columns_view_disconnect_accelerators (view);
   if (view->preferences != NULL)
     g_object_unref (view->preferences);
   if (view->history != NULL)
@@ -1670,9 +2096,9 @@ thunar_miller_columns_view_set_property (GObject      *object,
       break;
 
     case PROP_ACCEL_GROUP:
-      if (view->accel_group != NULL)
-        g_object_unref (view->accel_group);
+      thunar_miller_columns_view_disconnect_accelerators (view);
       view->accel_group = g_value_dup_object (value);
+      thunar_miller_columns_view_connect_accelerators (view);
       break;
 
     default:
@@ -1837,8 +2263,7 @@ thunar_miller_columns_view_scroll_to_file (ThunarView *view,
   if (column != NULL && select)
     {
       thunar_miller_column_set_selected_file (column, file);
-      g_object_notify (G_OBJECT (view), "selected-files");
-      thunar_miller_columns_view_update_statusbar_text_internal (miller_view);
+      thunar_miller_columns_view_column_selection_changed (column, miller_view);
     }
 }
 
@@ -1868,8 +2293,7 @@ thunar_miller_columns_view_set_selected_files_view (ThunarView *view,
   if (column != NULL)
     {
       thunar_miller_column_set_selected_files (column, selected_files);
-      g_object_notify (G_OBJECT (view), "selected-files");
-      thunar_miller_columns_view_update_statusbar_text_internal (miller_view);
+      thunar_miller_columns_view_column_selection_changed (column, miller_view);
     }
 }
 
@@ -1959,6 +2383,35 @@ thunar_miller_columns_view_append_menu_items (ThunarMillerColumnsView *view,
   gtk_widget_show (item);
 }
 
+GtkWidget *
+thunar_miller_columns_view_append_menu_item (ThunarMillerColumnsView       *view,
+                                             GtkMenu                       *menu,
+                                             ThunarMillerColumnsViewAction  action)
+{
+  ThunarMillerColumn *column;
+  GtkTreeSelection   *selection;
+  GtkWidget          *item;
+
+  _thunar_return_val_if_fail (THUNAR_IS_MILLER_COLUMNS_VIEW (view), NULL);
+
+  item = xfce_gtk_menu_item_new_from_action_entry (get_miller_action_entry (action),
+                                                   G_OBJECT (view),
+                                                   GTK_MENU_SHELL (menu));
+
+  if (action == THUNAR_MILLER_COLUMNS_VIEW_ACTION_UNSELECT_ALL_FILES)
+    {
+      column = thunar_miller_columns_view_get_active_column (view);
+      selection = column != NULL
+                ? gtk_tree_view_get_selection (GTK_TREE_VIEW (thunar_miller_column_get_tree_view (column)))
+                : NULL;
+      gtk_widget_set_sensitive (item,
+                                selection != NULL
+                                && gtk_tree_selection_count_selected_rows (selection) > 0);
+    }
+
+  return item;
+}
+
 static void
 thunar_miller_columns_view_navigator_init (ThunarNavigatorIface *iface)
 {
@@ -2005,6 +2458,9 @@ thunar_miller_columns_view_class_init (ThunarMillerColumnsViewClass *klass)
   gobject_class->get_property = thunar_miller_columns_view_get_property;
   gobject_class->set_property = thunar_miller_columns_view_set_property;
   gtkwidget_class->grab_focus = thunar_miller_columns_view_grab_focus;
+
+  xfce_gtk_translate_action_entries (miller_columns_view_action_entries,
+                                     G_N_ELEMENTS (miller_columns_view_action_entries));
 
   g_object_class_override_property (gobject_class, PROP_CURRENT_DIRECTORY, "current-directory");
   g_object_class_override_property (gobject_class, PROP_SELECTED_FILES, "selected-files");
