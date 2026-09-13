@@ -290,6 +290,15 @@ thunar_view_scroll_to_file (ThunarView *view,
 
 
 
+/**
+ * thunar_view_get_selected_files:
+ * @view: a #ThunarView.
+ *
+ * Returns an owned snapshot of the selection. Free the list and its file
+ * references with thunar_g_list_free_full() when no longer needed.
+ *
+ * Returns: (transfer full) (element-type ThunarFile): the selected files.
+ **/
 GList *
 thunar_view_get_selected_files (ThunarView *view)
 {

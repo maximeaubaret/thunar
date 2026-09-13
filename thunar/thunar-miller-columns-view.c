@@ -1162,7 +1162,7 @@ thunar_miller_columns_view_update_statusbar_text_internal (ThunarMillerColumnsVi
 
 done:
   g_free (view->statusbar_text);
-  view->statusbar_text = text;
+  view->statusbar_text = text != NULL ? text : g_strdup ("");
   g_object_notify (G_OBJECT (view), "statusbar-text");
 }
 
@@ -2227,9 +2227,11 @@ thunar_miller_columns_view_reload (ThunarView *view,
                                    gboolean    reload_info)
 {
   ThunarMillerColumnsView *miller_view = THUNAR_MILLER_COLUMNS_VIEW (view);
+  GList                   *lp;
 
-  if (miller_view->current_directory != NULL)
-    thunar_miller_columns_view_update_columns (miller_view, FALSE);
+  /* Reload the existing models so the column chain and selection survive. */
+  for (lp = miller_view->columns; lp != NULL; lp = lp->next)
+    thunar_miller_column_reload (THUNAR_MILLER_COLUMN (lp->data), reload_info);
 }
 
 static gboolean

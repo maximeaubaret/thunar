@@ -2579,7 +2579,7 @@ thunar_window_switch_current_view (ThunarWindow *window,
     {
       thunar_window_create_view_binding (window, G_OBJECT (new_view), "current-directory",
                                          G_OBJECT (terminal), "current-directory",
-                                         G_BINDING_DEFAULT);
+                                         G_BINDING_SYNC_CREATE);
     }
 #endif
 
@@ -3955,10 +3955,12 @@ thunar_window_cancel_search (ThunarWindow *window)
   /* null check for the same reason as thunar_standard_view_set_searching */
   if (window->view != NULL)
     {
-      if (thunar_standard_view_get_saved_view_type (THUNAR_STANDARD_VIEW (window->view)) != 0)
-        thunar_window_action_view_changed (window, thunar_standard_view_get_saved_view_type (THUNAR_STANDARD_VIEW (window->view)));
+      GType saved_view_type = thunar_standard_view_get_saved_view_type (THUNAR_STANDARD_VIEW (window->view));
 
+      /* Clear the search state before restoring a potentially non-standard view. */
       thunar_standard_view_save_view_type (THUNAR_STANDARD_VIEW (window->view), 0);
+      if (saved_view_type != 0)
+        thunar_window_action_view_changed (window, saved_view_type);
     }
 
   /* set the status of the search toolbar button */
@@ -4709,7 +4711,7 @@ thunar_window_replace_view (ThunarWindow *window,
   GtkWidget *paned_container = gtk_widget_get_parent (view_to_replace);
 
 #ifdef HAVE_VTE
-  ThunarTerminalWidget *terminal_to_reuse = thunar_window_get_view_terminal (view_to_replace);
+  ThunarTerminalWidget *terminal_to_reuse = NULL;
 
   /* Ensure the widget hierarchy is as expected. */
   if (!GTK_IS_PANED (paned_container))
@@ -4724,6 +4726,11 @@ thunar_window_replace_view (ThunarWindow *window,
 #endif
 
 #ifdef HAVE_VTE
+  /* The paned owns the terminal even while a Miller view is displayed. */
+  GtkWidget *terminal_child = gtk_paned_get_child2 (GTK_PANED (paned_container));
+  if (THUNAR_IS_TERMINAL_WIDGET (terminal_child))
+    terminal_to_reuse = THUNAR_TERMINAL_WIDGET (terminal_child);
+
   /* Keep terminal alive during the swap. */
   if (terminal_to_reuse != NULL)
     g_object_ref (terminal_to_reuse);
@@ -4748,6 +4755,7 @@ thunar_window_replace_view (ThunarWindow *window,
     thunar_standard_view_set_terminal_widget (THUNAR_STANDARD_VIEW (new_view), terminal_to_reuse);
   else if (terminal_to_reuse != NULL)
     gtk_widget_hide (GTK_WIDGET (terminal_to_reuse));
+  g_clear_object (&terminal_to_reuse);
 #endif
   /* If the replaced view was the active one, update the main window view pointer. */
   if (view_to_replace == window->view)
@@ -5299,6 +5307,13 @@ interference,and then add a shortcut to hide the terminal to keep usage consiste
 
   focused_widget = gtk_window_get_focus (window);
 
+  /* A view or terminal switch can unrealize the key-press target before its
+   * queued release arrives. GTK cannot deliver events to that widget. */
+  if (key_event->type == GDK_KEY_RELEASE
+      && focused_widget != NULL
+      && !gtk_widget_get_realized (focused_widget))
+    return GDK_EVENT_STOP;
+
 /* Turn the accelerator priority around globally,
  * so that the focused widget always gets the accels first.
  * Implementing this cleanly while maintaining some wanted accels
@@ -5516,6 +5531,7 @@ thunar_window_select_search_result (ThunarWindow *window)
       selected_files = thunar_view_get_selected_files (THUNAR_VIEW (window->view));
       if (g_list_length (selected_files) == 0)
         thunar_standard_view_select_first_file (THUNAR_STANDARD_VIEW (window->view));
+      thunar_g_list_free_full (selected_files);
     }
 }
 
@@ -6583,6 +6599,7 @@ thunar_window_update_image_preview (ThunarWindow *window)
           gtk_widget_show (window->right_pane_size_value);
 
           g_free (file_size);
+          thunar_g_list_free_full (selected_files);
         }
       else
         {
@@ -6664,6 +6681,8 @@ thunar_window_selection_changed (ThunarWindow *window)
 
       thunar_window_update_image_preview (window);
     }
+
+  thunar_g_list_free_full (selected_files);
 }
 
 

@@ -106,6 +106,10 @@ ThunarFolder *
 thunar_miller_column_get_folder (ThunarMillerColumn *column);
 
 void
+thunar_miller_column_reload (ThunarMillerColumn *column,
+                              gboolean            reload_info);
+
+void
 thunar_miller_column_set_zoom_level (ThunarMillerColumn *column,
                                      ThunarZoomLevel     zoom_level);
 

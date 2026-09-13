@@ -10,6 +10,7 @@
 
 #include "thunar/thunar-miller-column.h"
 
+#include "thunar/thunar-dialogs.h"
 #include "thunar/thunar-gobject-extensions.h"
 #include "thunar/thunar-icon-renderer.h"
 #include "thunar/thunar-marshal.h"
@@ -442,9 +443,7 @@ thunar_miller_column_dispose (GObject *object)
 
   if (column->model != NULL)
     {
-      g_signal_handlers_disconnect_by_func (column->model,
-                                            thunar_miller_column_model_notify_loading,
-                                            column);
+      g_signal_handlers_disconnect_by_data (column->model, column);
 
       if (GTK_IS_TREE_VIEW (column->tree_view))
         gtk_tree_view_set_model (GTK_TREE_VIEW (column->tree_view), NULL);
@@ -654,6 +653,8 @@ thunar_miller_column_key_press (GtkWidget          *widget,
     case GDK_KEY_Tab:
     case GDK_KEY_KP_Tab:
     case GDK_KEY_ISO_Left_Tab:
+      if ((modifiers & ~GDK_SHIFT_MASK) != 0)
+        return FALSE;
       backwards = event->keyval == GDK_KEY_ISO_Left_Tab || (modifiers & GDK_SHIFT_MASK) != 0;
       handled = thunar_miller_column_navigate (column,
                                                miller_column_signals[backwards ? SIGNAL_NAVIGATE_LEFT : SIGNAL_NAVIGATE_RIGHT],
@@ -734,6 +735,18 @@ thunar_miller_column_key_snooper (GtkWidget   *grab_widget,
     case GDK_KEY_Tab:
     case GDK_KEY_KP_Tab:
     case GDK_KEY_ISO_Left_Tab:
+      if ((modifiers & ~GDK_SHIFT_MASK) != 0)
+        {
+          GtkWidget *window = gtk_widget_get_toplevel (GTK_WIDGET (column));
+
+          /* The search popup owns the key event, so merely propagating it
+           * cannot reach the main window's tab accelerators. */
+          if (GTK_IS_WINDOW (window))
+            g_signal_emit_by_name (window, "key-press-event", event, &result);
+          if (result)
+            thunar_miller_column_clear_search_active (column);
+          goto out;
+        }
       backwards = event->keyval == GDK_KEY_ISO_Left_Tab || (modifiers & GDK_SHIFT_MASK) != 0;
       result = thunar_miller_column_navigate (column,
                                               miller_column_signals[backwards ? SIGNAL_NAVIGATE_LEFT : SIGNAL_NAVIGATE_RIGHT],
@@ -961,6 +974,19 @@ thunar_miller_column_get_directory (ThunarMillerColumn *column)
   return column->directory;
 }
 
+static void
+thunar_miller_column_error (ThunarTreeViewModel *model,
+                            const GError        *error,
+                            ThunarMillerColumn  *column)
+{
+  if (column->directory == NULL)
+    return;
+
+  thunar_dialogs_show_error (GTK_WIDGET (column), error,
+                             _("Failed to open directory \"%s\""),
+                             thunar_file_get_display_name (column->directory));
+}
+
 void
 thunar_miller_column_set_directory (ThunarMillerColumn *column,
                                     ThunarFile         *directory)
@@ -977,9 +1003,7 @@ thunar_miller_column_set_directory (ThunarMillerColumn *column,
     g_object_unref (column->directory);
   if (column->model != NULL)
     {
-      g_signal_handlers_disconnect_by_func (column->model,
-                                            thunar_miller_column_model_notify_loading,
-                                            column);
+      g_signal_handlers_disconnect_by_data (column->model, column);
       g_object_unref (column->model);
       column->model = NULL;
     }
@@ -1006,6 +1030,8 @@ thunar_miller_column_set_directory (ThunarMillerColumn *column,
       column->model = g_object_new (THUNAR_TYPE_TREE_VIEW_MODEL, NULL);
       g_signal_connect (column->model, "notify::loading",
                         G_CALLBACK (thunar_miller_column_model_notify_loading), column);
+      g_signal_connect (column->model, "error",
+                        G_CALLBACK (thunar_miller_column_error), column);
       g_object_set (G_OBJECT (column->model), "folders-first", column->folders_first, NULL);
       gtk_tree_sortable_set_sort_column_id (GTK_TREE_SORTABLE (column->model), column->sort_column, column->sort_order);
       thunar_tree_view_model_set_folder (column->model, folder, NULL);
@@ -1399,6 +1425,37 @@ thunar_miller_column_get_folder (ThunarMillerColumn *column)
 {
   _thunar_return_val_if_fail (THUNAR_IS_MILLER_COLUMN (column), NULL);
   return column->model != NULL ? thunar_tree_view_model_get_folder (column->model) : NULL;
+}
+
+void
+thunar_miller_column_reload (ThunarMillerColumn *column,
+                              gboolean            reload_info)
+{
+  ThunarFolder *folder;
+
+  _thunar_return_if_fail (THUNAR_IS_MILLER_COLUMN (column));
+
+  folder = thunar_miller_column_get_folder (column);
+  if (folder != NULL)
+    {
+      thunar_folder_reload (folder, reload_info);
+    }
+  else if (column->directory != NULL)
+    {
+      /* An enumeration error detaches the folder from the model. Reattach it
+       * so Refresh can retry after permissions or connectivity are restored. */
+      ThunarFile *directory = g_object_ref (column->directory);
+
+      thunar_miller_column_block_selection_changed (column, TRUE);
+      thunar_miller_column_set_directory (column, NULL);
+      thunar_miller_column_set_directory (column, directory);
+      thunar_miller_column_block_selection_changed (column, FALSE);
+      g_object_unref (directory);
+
+      folder = thunar_miller_column_get_folder (column);
+      if (folder != NULL)
+        thunar_folder_reload (folder, reload_info);
+    }
 }
 
 void

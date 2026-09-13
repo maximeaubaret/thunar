@@ -1697,7 +1697,7 @@ thunar_standard_view_get_selected_files_component (ThunarComponent *component)
 static GList *
 thunar_standard_view_get_selected_files_view (ThunarView *view)
 {
-  return THUNAR_STANDARD_VIEW (view)->priv->selected_files;
+  return thunar_g_list_copy_deep (THUNAR_STANDARD_VIEW (view)->priv->selected_files);
 }
 
 
